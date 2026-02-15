@@ -31,3 +31,4 @@ nupkg/
 # JetBrains Rider
 .idea/
 *.sln.iml
+artifacts/
