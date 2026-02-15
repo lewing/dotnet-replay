@@ -98,7 +98,7 @@ string Separator()
     return Dim(new string('─', Math.Min(width, 120)));
 }
 
-string StripMarkup(string s) => Regex.Replace(s, @"\[/?[a-zA-Z_ ]+\]", "");
+string StripMarkup(string s) => Regex.Replace(s, @"\[/?\]|\[/?(?:blue|green|yellow|red|dim|bold|cyan|invert|on cyan black)\]", "");
 
 string PadVisible(string s, int totalWidth)
 {
@@ -829,10 +829,10 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
         int w = AnsiConsole.Profile.Width;
         int h = AnsiConsole.Profile.Height;
 
-        // Detect terminal resize
+        // Detect terminal resize — just update dimensions, no clear needed
+        // since we overwrite every line including padding
         if (w != lastWidth || h != lastHeight)
         {
-            needsFullClear = true;
             lastWidth = w;
             lastHeight = h;
         }
