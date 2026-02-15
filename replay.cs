@@ -100,11 +100,57 @@ string Separator()
 
 string StripMarkup(string s) => Regex.Replace(s, @"\[/?\]|\[/?(?:blue|green|yellow|red|dim|bold|cyan|invert|on cyan black)\]", "");
 
+string GetVisibleText(string s)
+{
+    var stripped = StripMarkup(s);
+    // Collapse Spectre escaped brackets to their visible form
+    stripped = stripped.Replace("[[", "[").Replace("]]", "]");
+    return stripped;
+}
+
+int VisibleWidth(string s)
+{
+    int width = 0;
+    foreach (var rune in s.EnumerateRunes())
+    {
+        if (rune.Value >= 0x1100 && (
+            (rune.Value <= 0x115F) ||
+            (rune.Value >= 0x2E80 && rune.Value <= 0x9FFF) ||
+            (rune.Value >= 0xF900 && rune.Value <= 0xFAFF) ||
+            (rune.Value >= 0xFE30 && rune.Value <= 0xFE6F) ||
+            (rune.Value >= 0xFF01 && rune.Value <= 0xFF60) ||
+            (rune.Value >= 0x1F000)))
+            width += 2;
+        else
+            width += 1;
+    }
+    return width;
+}
+
+string TruncateToWidth(string s, int maxWidth)
+{
+    int width = 0;
+    int i = 0;
+    foreach (var rune in s.EnumerateRunes())
+    {
+        int charWidth = (rune.Value >= 0x1100 && (
+            (rune.Value <= 0x115F) ||
+            (rune.Value >= 0x2E80 && rune.Value <= 0x9FFF) ||
+            (rune.Value >= 0xF900 && rune.Value <= 0xFAFF) ||
+            (rune.Value >= 0xFE30 && rune.Value <= 0xFE6F) ||
+            (rune.Value >= 0xFF01 && rune.Value <= 0xFF60) ||
+            (rune.Value >= 0x1F000))) ? 2 : 1;
+        if (width + charWidth > maxWidth) break;
+        width += charWidth;
+        i += rune.Utf16SequenceLength;
+    }
+    return s[..i];
+}
+
 string PadVisible(string s, int totalWidth)
 {
-    // Strip Spectre markup tags to measure visible length, then pad with spaces
-    var visible = StripMarkup(s);
-    int padding = totalWidth - visible.Length;
+    var visible = GetVisibleText(s);
+    int padding = totalWidth - VisibleWidth(visible);
     return padding > 0 ? s + new string(' ', padding) : s;
 }
 
@@ -764,8 +810,8 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
     int filterIndex = currentFilter is null ? 0 : Array.IndexOf(filterCycle, currentFilter);
     if (filterIndex < 0) filterIndex = 0;
 
-    string StripAnsi(string s) => StripMarkup(s);
-    string HighlightLine(string s) => noColor ? s : $"[on cyan black]{Markup.Escape(StripMarkup(s))}[/]";
+    string StripAnsi(string s) => GetVisibleText(s);
+    string HighlightLine(string s) => noColor ? s : $"[on cyan black]{Markup.Escape(GetVisibleText(s))}[/]";
 
     void RebuildContent()
     {
@@ -808,19 +854,22 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
     {
         AnsiConsole.Cursor.SetPosition(0, row + 1); // Spectre uses 1-based positions
         var visible = StripAnsi(markupText);
-        if (noColor)
+        int visWidth = VisibleWidth(visible);
+        if (visWidth >= width)
         {
-            if (visible.Length < width)
-                Console.Write(visible + new string(' ', width - visible.Length));
+            var truncated = TruncateToWidth(visible, width - 1) + "…";
+            if (noColor)
+                Console.Write(truncated);
             else
-                Console.Write(visible);
+                AnsiConsole.Markup($"[dim]{Markup.Escape(truncated)}[/]");
         }
         else
         {
-            if (visible.Length < width)
-                AnsiConsole.Markup(markupText + new string(' ', width - visible.Length));
+            int padding = width - visWidth;
+            if (noColor)
+                Console.Write(visible + new string(' ', padding));
             else
-                AnsiConsole.Markup(markupText);
+                AnsiConsole.Markup(markupText + new string(' ', padding));
         }
     }
 
@@ -849,7 +898,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
 
         // Row 0: Compact info bar (inverted)
         string topBarContent = " " + Markup.Escape(infoBar);
-        int topBarVisLen = topBarContent.Length;
+        int topBarVisLen = VisibleWidth(topBarContent.Replace("[[", "[").Replace("]]", "]"));
         if (topBarVisLen < w)
             topBarContent += new string(' ', w - topBarVisLen);
         AnsiConsole.Cursor.SetPosition(0, 1); // 1-based
@@ -922,12 +971,12 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
             statusText = $" Line {currentLine}/{contentLines.Count} | Filter: {statusFilter}{followIndicator} | \u2191\u2193 j/k scroll | Space page | / search | q quit";
         }
         var escapedStatus = Markup.Escape(statusText);
-        int statusVisLen = statusText.Length;
+        int statusVisLen = VisibleWidth(statusText);
         if (statusVisLen < w)
             escapedStatus += new string(' ', w - statusVisLen);
         AnsiConsole.Cursor.SetPosition(0, row + 1);
         if (noColor)
-            Console.Write(statusText + (statusText.Length < w ? new string(' ', w - statusText.Length) : ""));
+            Console.Write(statusText + (VisibleWidth(statusText) < w ? new string(' ', w - VisibleWidth(statusText)) : ""));
         else
             AnsiConsole.Markup($"[invert]{escapedStatus}[/]");
 
