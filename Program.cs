@@ -104,6 +104,54 @@ string Truncate(string s, int max)
     return s[..max] + $"… [{s.Length - max} more chars]";
 }
 
+List<string> FormatJsonProperties(JsonElement obj, string linePrefix, int maxValueLen)
+{
+    var lines = new List<string>();
+    if (obj.ValueKind == JsonValueKind.Object)
+    {
+        foreach (var prop in obj.EnumerateObject())
+        {
+            var val = prop.Value.ValueKind == JsonValueKind.String
+                ? prop.Value.GetString() ?? ""
+                : prop.Value.GetRawText();
+            var truncated = Truncate(val, maxValueLen);
+            foreach (var segment in truncated.Split('\n'))
+                lines.Add($"{linePrefix}{prop.Name}: {segment}");
+        }
+    }
+    else if (obj.ValueKind == JsonValueKind.String)
+    {
+        var val = obj.GetString() ?? "";
+        var truncated = Truncate(val, maxValueLen);
+        foreach (var segment in truncated.Split('\n'))
+            lines.Add($"{linePrefix}{segment}");
+    }
+    else
+    {
+        lines.Add($"{linePrefix}{Truncate(obj.GetRawText(), maxValueLen)}");
+    }
+    return lines;
+}
+
+string ExtractContentString(JsonElement el)
+{
+    if (el.ValueKind == JsonValueKind.String)
+        return el.GetString() ?? "";
+    if (el.ValueKind == JsonValueKind.Object && el.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String)
+        return c.GetString() ?? "";
+    if (el.ValueKind == JsonValueKind.Array)
+    {
+        foreach (var item in el.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("text", out var t) && t.ValueKind == JsonValueKind.String)
+                return t.GetString() ?? "";
+            if (item.ValueKind == JsonValueKind.String)
+                return item.GetString() ?? "";
+        }
+    }
+    return el.GetRawText();
+}
+
 string SafeGetString(JsonElement el, string prop)
 {
     if (el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String)
@@ -518,9 +566,9 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
                 lines.Add(margin + Yellow($"┃ TOOL: {toolName}"));
                 if (expandTool && data.ValueKind == JsonValueKind.Object && data.TryGetProperty("arguments", out var toolArgs))
                 {
-                    var argStr = toolArgs.ValueKind == JsonValueKind.String
-                        ? toolArgs.GetString() ?? "" : toolArgs.GetRawText();
-                    lines.Add(margin + Dim($"┃   Args: {Truncate(argStr, 500)}"));
+                    lines.Add(margin + Dim("┃   Args:"));
+                    foreach (var pl in FormatJsonProperties(toolArgs, "┃     ", 500))
+                        lines.Add(margin + Dim(pl));
                 }
                 break;
             }
@@ -533,7 +581,7 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
                 {
                     status = SafeGetString(res, "status");
                     if (res.TryGetProperty("content", out var rc))
-                        resultContent = rc.ValueKind == JsonValueKind.String ? rc.GetString() ?? "" : rc.GetRawText();
+                        resultContent = ExtractContentString(rc);
                 }
                 var isError = status == "error";
                 var colorFn = isError ? (Func<string, string>)Red : Dim;
@@ -623,20 +671,22 @@ List<string> RenderWazaContentLines(WazaData d, string? filter, bool expandTool)
             {
                 if (item.TryGetProperty("arguments", out var toolArgs) && toolArgs.ValueKind != JsonValueKind.Null)
                 {
-                    var argStr = toolArgs.ValueKind == JsonValueKind.String
-                        ? toolArgs.GetString() ?? "" : toolArgs.GetRawText();
-                    lines.Add(margin + Dim($"┃   Args: {Truncate(argStr, 500)}"));
+                    lines.Add(margin + Dim("┃   Args:"));
+                    foreach (var pl in FormatJsonProperties(toolArgs, "┃     ", 500))
+                        lines.Add(margin + Dim(pl));
                 }
                 if (item.TryGetProperty("tool_result", out var toolRes) && toolRes.ValueKind != JsonValueKind.Null)
                 {
-                    var resStr = toolRes.ValueKind == JsonValueKind.String
-                        ? toolRes.GetString() ?? "" : toolRes.GetRawText();
+                    var resStr = ExtractContentString(toolRes);
                     if (resStr.Any(c => char.IsControl(c) && c != '\n' && c != '\r' && c != '\t'))
                         lines.Add(margin + Dim($"┃   [binary content, {resStr.Length} bytes]"));
                     else
                     {
                         var truncated = Truncate(resStr, 500);
-                        foreach (var line in truncated.Split('\n').Take(full ? int.MaxValue : 20))
+                        var resLines = truncated.Split('\n').Take(full ? int.MaxValue : 20).ToArray();
+                        if (resLines.Length > 0)
+                            lines.Add(margin + Dim($"┃   Result: {resLines[0]}"));
+                        foreach (var line in resLines.Skip(1))
                             lines.Add(margin + Dim($"┃   {line}"));
                     }
                 }
