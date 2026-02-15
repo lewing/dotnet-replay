@@ -1,6 +1,6 @@
 # dotnet-replay
 
-Interactive terminal viewer for Copilot CLI sessions and waza evaluation transcripts.
+Interactive terminal viewer for Copilot CLI sessions and [waza](https://github.com/spboyer/waza) evaluation transcripts.
 
 <img width="2750" height="1555" alt="image" src="https://github.com/user-attachments/assets/75114d1a-965b-44da-bbda-33583486ba93" />
 
@@ -92,6 +92,10 @@ Pipe to a file:
 ```bash
 replay session.jsonl --expand-tools > output.txt
 ```
+
+## About
+
+`dotnet-replay` was built by a [squad](https://github.com/lewing/arena) currently in stealth mode.
 
 ## License
 
