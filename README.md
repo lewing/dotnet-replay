@@ -7,28 +7,43 @@ Interactive terminal viewer for Copilot CLI sessions and waza evaluation transcr
 
 ## Install
 
+### Global tool (recommended)
+
 ```bash
 dotnet tool install -g dotnet-replay
 ```
+
+Once installed globally, run `replay` directly from any directory.
+
+### Local tool manifest
+
+```bash
+dotnet new tool-manifest   # if you don't already have one
+dotnet tool install dotnet-replay
+```
+
+With a local install, use `dotnet replay` instead.
 
 ## Usage
 
 ### Interactive Mode (Default)
 
 ```bash
-dotnet replay <file>               # Interactive pager with keybindings
-dotnet replay <file> --tail 10     # Show only the last 10 turns
-dotnet replay <file> --expand-tools # Show tool call arguments and results
-dotnet replay <file> --full        # Don't truncate long content
-dotnet replay <file> --filter user # Filter by event type (user, assistant, tool, error)
-dotnet replay <file> --no-color    # Disable ANSI colors
+replay <file>               # Interactive pager with keybindings
+replay <file> --tail 10     # Show only the last 10 turns
+replay <file> --expand-tools # Show tool call arguments and results
+replay <file> --full        # Don't truncate long content
+replay <file> --filter user # Filter by event type (user, assistant, tool, error)
+replay <file> --no-color    # Disable ANSI colors
 ```
+
+> **Note:** `dotnet replay` also works if you prefer the explicit prefix.
 
 ### Stream Mode (Non-Interactive)
 
 ```bash
-dotnet replay <file> --stream      # Output entire transcript and exit
-dotnet replay <file> | less        # Auto-switches to stream mode when piped
+replay <file> --stream      # Output entire transcript and exit
+replay <file> | less        # Auto-switches to stream mode when piped
 ```
 
 ## Supported Formats
@@ -60,22 +75,22 @@ dotnet replay <file> | less        # Auto-switches to stream mode when piped
 
 View an interactive transcript:
 ```bash
-dotnet replay session-events.jsonl
+replay session-events.jsonl
 ```
 
 View the last 5 turns with tool expansion:
 ```bash
-dotnet replay results.json --tail 5 --expand-tools
+replay results.json --tail 5 --expand-tools
 ```
 
 Stream the entire transcript without interaction:
 ```bash
-dotnet replay transcript.json --stream
+replay transcript.json --stream
 ```
 
 Pipe to a file:
 ```bash
-dotnet replay session.jsonl --expand-tools > output.txt
+replay session.jsonl --expand-tools > output.txt
 ```
 
 ## License
