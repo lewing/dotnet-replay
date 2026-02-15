@@ -14,6 +14,7 @@ bool full = false;
 string? filterType = null;
 bool noColor = false;
 bool streamMode = false;
+bool noFollow = false;
 
 for (int i = 0; i < cliArgs.Length; i++)
 {
@@ -42,6 +43,9 @@ for (int i = 0; i < cliArgs.Length; i++)
             break;
         case "--stream":
             streamMode = true;
+            break;
+        case "--no-follow":
+            noFollow = true;
             break;
         default:
             if (cliArgs[i].StartsWith("-")) { Console.Error.WriteLine($"Unknown option: {cliArgs[i]}"); PrintHelp(); return; }
@@ -165,14 +169,14 @@ else
         if (parsed is null) return;
         headerLines = RenderJsonlHeaderLines(parsed);
         contentLines = RenderJsonlContentLines(parsed, filterType, expandTools);
-        RunInteractivePager(headerLines, contentLines, parsed, isJsonlFormat: true);
+        RunInteractivePager(headerLines, contentLines, parsed, isJsonlFormat: true, noFollow: noFollow);
     }
     else if (isWaza)
     {
         var parsed = ParseWazaData(wazaDoc!);
         headerLines = RenderWazaHeaderLines(parsed);
         contentLines = RenderWazaContentLines(parsed, filterType, expandTools);
-        RunInteractivePager(headerLines, contentLines, parsed, isJsonlFormat: false);
+        RunInteractivePager(headerLines, contentLines, parsed, isJsonlFormat: false, noFollow: true);
     }
 }
 
@@ -654,7 +658,7 @@ List<string> RenderWazaContentLines(WazaData d, string? filter, bool expandTool)
 }
 
 // ========== Interactive Pager ==========
-void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines, T parsedData, bool isJsonlFormat)
+void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines, T parsedData, bool isJsonlFormat, bool noFollow)
 {
     int scrollOffset = 0;
     string? currentFilter = filterType;
@@ -666,6 +670,14 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
     var searchBuffer = new StringBuilder();
     bool showInfoOverlay = false;
 
+    // Follow mode state
+    bool following = isJsonlFormat && !noFollow;
+    bool userAtBottom = true;
+    long lastFileOffset = 0;
+    int fileChangedFlag = 0; // 0=no change, 1=changed; use Interlocked for thread safety
+    DateTime lastReadTime = DateTime.MinValue;
+    FileSystemWatcher? watcher = null;
+
     // Track terminal dimensions for resize detection
     int lastWidth = Console.WindowWidth > 0 ? Console.WindowWidth : 80;
     int lastHeight = Console.WindowHeight > 0 ? Console.WindowHeight : 24;
@@ -674,7 +686,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
     // Build compact info bar
     string infoBar;
     if (isJsonlFormat && parsedData is JsonlData jData)
-        infoBar = BuildJsonlInfoBar(jData);
+        infoBar = BuildJsonlInfoBar(jData) + (following ? " ↓ FOLLOWING" : "");
     else if (parsedData is WazaData wData)
         infoBar = BuildWazaInfoBar(wData);
     else
@@ -832,7 +844,8 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
         }
         else
         {
-            statusBar = $" Line {currentLine}/{contentLines.Count} | Filter: {statusFilter} | \u2191\u2193 j/k scroll | Space page | / search | q quit";
+            var followIndicator = following ? (userAtBottom ? " LIVE" : " [new content ↓]") : "";
+            statusBar = $" Line {currentLine}/{contentLines.Count} | Filter: {statusFilter}{followIndicator} | \u2191\u2193 j/k scroll | Space page | / search | q quit";
         }
         var visibleStatus = StripAnsi(statusBar);
         if (visibleStatus.Length < w)
@@ -855,10 +868,87 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
     Console.CursorVisible = false;
     try
     {
+        // Set up FileSystemWatcher for follow mode
+        if (following && filePath is not null)
+        {
+            lastFileOffset = new FileInfo(filePath).Length;
+            var dir = Path.GetDirectoryName(Path.GetFullPath(filePath))!;
+            var name = Path.GetFileName(filePath);
+            watcher = new FileSystemWatcher(dir, name);
+            watcher.Changed += (_, _) => Interlocked.Exchange(ref fileChangedFlag, 1);
+            watcher.EnableRaisingEvents = true;
+        }
+
         Render();
 
         while (true)
         {
+            // Check for file changes in follow mode
+            if (following && Interlocked.CompareExchange(ref fileChangedFlag, 0, 1) == 1 && filePath is not null)
+            {
+                var now = DateTime.UtcNow;
+                if ((now - lastReadTime).TotalMilliseconds >= 100)
+                {
+                    lastReadTime = now;
+                    try
+                    {
+                        var fi = new FileInfo(filePath);
+                        if (fi.Length > lastFileOffset && parsedData is JsonlData jdFollow)
+                        {
+                            var newLines = new List<string>();
+                            using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                            {
+                                fs.Seek(lastFileOffset, SeekOrigin.Begin);
+                                using var sr = new StreamReader(fs, Encoding.UTF8);
+                                string? line;
+                                while ((line = sr.ReadLine()) != null)
+                                {
+                                    if (!string.IsNullOrWhiteSpace(line))
+                                        newLines.Add(line);
+                                }
+                                lastFileOffset = fs.Position;
+                            }
+
+                            if (newLines.Count > 0)
+                            {
+                                bool wasAtBottom = scrollOffset >= Math.Max(0, contentLines.Count - ViewportHeight());
+                                foreach (var rawLine in newLines)
+                                {
+                                    try
+                                    {
+                                        var doc = JsonDocument.Parse(rawLine);
+                                        jdFollow.Events.Add(doc);
+                                        var root = doc.RootElement;
+                                        var evType = SafeGetString(root, "type");
+                                        var tsStr = SafeGetString(root, "timestamp");
+                                        DateTimeOffset? ts = null;
+                                        if (DateTimeOffset.TryParse(tsStr, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dto))
+                                            ts = dto;
+                                        if (evType is "user.message" or "assistant.message" or "tool.execution_start" or "tool.result")
+                                            jdFollow.Turns.Add((evType, root, ts));
+                                        jdFollow.EventCount = jdFollow.Events.Count;
+                                    }
+                                    catch { /* skip malformed lines */ }
+                                }
+                                RebuildContent();
+                                infoBar = BuildJsonlInfoBar(jdFollow) + " ↓ FOLLOWING";
+                                if (wasAtBottom && userAtBottom)
+                                {
+                                    scrollOffset = Math.Max(0, contentLines.Count - ViewportHeight());
+                                }
+                                Render();
+                            }
+                        }
+                    }
+                    catch { /* ignore read errors, will retry on next change */ }
+                }
+            }
+
+            if (!Console.KeyAvailable)
+            {
+                Thread.Sleep(50);
+                continue;
+            }
             var key = Console.ReadKey(true);
 
             if (inSearchMode)
@@ -921,18 +1011,21 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
 
                 case ConsoleKey.UpArrow:
                     scrollOffset = Math.Max(0, scrollOffset - 1);
+                    userAtBottom = scrollOffset >= Math.Max(0, contentLines.Count - ViewportHeight());
                     Render();
                     break;
 
                 case ConsoleKey.DownArrow:
                     scrollOffset++;
                     ClampScroll();
+                    userAtBottom = scrollOffset >= Math.Max(0, contentLines.Count - ViewportHeight());
                     Render();
                     break;
 
                 case ConsoleKey.LeftArrow:
                 case ConsoleKey.PageUp:
                     scrollOffset = Math.Max(0, scrollOffset - ViewportHeight());
+                    userAtBottom = scrollOffset >= Math.Max(0, contentLines.Count - ViewportHeight());
                     Render();
                     break;
 
@@ -941,16 +1034,19 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
                 case ConsoleKey.Spacebar:
                     scrollOffset += ViewportHeight();
                     ClampScroll();
+                    userAtBottom = scrollOffset >= Math.Max(0, contentLines.Count - ViewportHeight());
                     Render();
                     break;
 
                 case ConsoleKey.Home:
                     scrollOffset = 0;
+                    userAtBottom = contentLines.Count <= ViewportHeight();
                     Render();
                     break;
 
                 case ConsoleKey.End:
                     scrollOffset = Math.Max(0, contentLines.Count - ViewportHeight());
+                    userAtBottom = true;
                     Render();
                     break;
 
@@ -959,28 +1055,34 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
                     {
                         case 'k':
                             scrollOffset = Math.Max(0, scrollOffset - 1);
+                            userAtBottom = scrollOffset >= Math.Max(0, contentLines.Count - ViewportHeight());
                             Render();
                             break;
                         case 'j':
                             scrollOffset++;
                             ClampScroll();
+                            userAtBottom = scrollOffset >= Math.Max(0, contentLines.Count - ViewportHeight());
                             Render();
                             break;
                         case 'h':
                             scrollOffset = Math.Max(0, scrollOffset - ViewportHeight());
+                            userAtBottom = scrollOffset >= Math.Max(0, contentLines.Count - ViewportHeight());
                             Render();
                             break;
                         case 'l':
                             scrollOffset += ViewportHeight();
                             ClampScroll();
+                            userAtBottom = scrollOffset >= Math.Max(0, contentLines.Count - ViewportHeight());
                             Render();
                             break;
                         case 'g':
                             scrollOffset = 0;
+                            userAtBottom = contentLines.Count <= ViewportHeight();
                             Render();
                             break;
                         case 'G':
                             scrollOffset = Math.Max(0, contentLines.Count - ViewportHeight());
+                            userAtBottom = true;
                             Render();
                             break;
                         case 't':
@@ -1027,6 +1129,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
     }
     finally
     {
+        watcher?.Dispose();
         Console.CursorVisible = true;
         Console.Clear();
     }
@@ -1071,6 +1174,7 @@ Options:
   --filter <type>     Filter by event type: user, assistant, tool, error
   --no-color          Disable ANSI colors
   --stream            Use streaming output (non-interactive, original behavior)
+  --no-follow         Disable auto-follow for JSONL files
   --help              Show this help
 
 Interactive mode (default):
@@ -1085,6 +1189,7 @@ Interactive mode (default):
   n/N                  Next/previous search match
   q/Escape             Quit
 
+JSONL files auto-follow by default (like tail -f). Use --no-follow to disable.
 When output is piped (redirected), stream mode is used automatically.
 ");
 }
@@ -1094,7 +1199,10 @@ record JsonlData(
     List<JsonDocument> Events,
     List<(string type, JsonElement root, DateTimeOffset? ts)> Turns,
     string SessionId, string Branch, string CopilotVersion, string Cwd,
-    DateTimeOffset? StartTime, DateTimeOffset? EndTime, int EventCount);
+    DateTimeOffset? StartTime, DateTimeOffset? EndTime, int EventCount)
+{
+    public int EventCount { get; set; } = EventCount;
+}
 
 record WazaData(
     JsonElement[] TranscriptItems,
