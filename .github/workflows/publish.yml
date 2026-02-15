@@ -1,64 +1,58 @@
-name: Publish to NuGet
+name: Publish Tool
+
+permissions:
+  id-token: write
+  contents: write
 
 on:
   push:
     tags:
-      - 'v*'  # Trigger on version tags like v0.1.0
-  workflow_dispatch:  # Allow manual trigger
-    inputs:
-      version:
-        description: 'Version to publish (e.g., 0.1.0)'
-        required: true
-        type: string
+      - "v*"
 
 jobs:
-  publish:
+  pack-and-publish:
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write  # Required for OIDC trusted publishing
-      contents: read
-    
+    environment: release
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Setup .NET
+      - uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: tag_name
+        run: echo "current_version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup .NET 9.0
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '9.0.x'
-      
-      - name: Extract version from tag
-        id: get_version
+
+      - name: Validate version consistency
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            # Extract version from tag (e.g., v0.1.0 -> 0.1.0)
-            VERSION="${GITHUB_REF#refs/tags/v}"
+          TAG_VERSION="${{ steps.tag_name.outputs.current_version }}"
+          CSPROJ_VERSION=$(grep -oP '(?<=<Version>)[^<]+' dotnet-replay.csproj)
+          
+          if [ "$TAG_VERSION" != "$CSPROJ_VERSION" ]; then
+            echo "Error: Tag version ($TAG_VERSION) does not match csproj version ($CSPROJ_VERSION)"
+            exit 1
           fi
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "Publishing version: $VERSION"
-      
-      - name: Restore dependencies
-        run: dotnet restore
-      
-      - name: Build
-        run: dotnet build --configuration Release --no-restore
-      
+          
+          echo "All versions match tag: ${TAG_VERSION}"
+
       - name: Pack
-        run: dotnet pack --configuration Release --no-build --output ./nupkg -p:PackageVersion=${{ steps.get_version.outputs.VERSION }}
-      
-      - name: NuGet login (OIDC → temp API key)
+        run: dotnet pack -c Release -o nupkg /p:Version=${{ steps.tag_name.outputs.current_version }}
+
+      - name: Create Release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: nupkg/*.nupkg
+          token: ${{ secrets.GITHUB_TOKEN }}
+          body: "Release ${{ github.ref_name }}"
+
+      - name: NuGet login
         uses: NuGet/login@v1
-        id: nuget_login
+        id: login
         with:
-          user: ${{ secrets.NUGET_USERNAME }}  # Your nuget.org username (NOT email)
-      
-      - name: Push to NuGet.org
-        run: dotnet nuget push ./nupkg/*.nupkg --api-key ${{ steps.nuget_login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
-      
-      - name: Upload package artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: nuget-package
-          path: ./nupkg/*.nupkg
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Push to NuGet
+        run: dotnet nuget push "nupkg/*.nupkg" --source https://api.nuget.org/v3/index.json --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --skip-duplicate

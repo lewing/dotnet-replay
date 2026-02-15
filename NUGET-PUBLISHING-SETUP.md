@@ -25,7 +25,7 @@ Trusted Publishing uses OpenID Connect (OIDC) to authenticate GitHub Actions wit
    | **Repository Owner** | `lewing` | Case-insensitive |
    | **Repository** | `dotnet-replay` | Case-insensitive |
    | **Workflow File** | `publish.yml` | **Filename ONLY** — do NOT include `.github/workflows/` path |
-   | **Environment** | _(leave empty)_ | The workflow doesn't use GitHub environments |
+   | **Environment** | `release` | **REQUIRED** — The workflow uses the `release` environment |
 
 4. **Choose Policy Owner**
    - Select yourself (individual) or an organization you belong to
@@ -33,24 +33,32 @@ Trusted Publishing uses OpenID Connect (OIDC) to authenticate GitHub Actions wit
 
 5. **Save the Policy**
 
-### 2. Add GitHub Secret
+### 2. Create GitHub Environment
 
 1. **Go to your GitHub repository**
    - Navigate to https://github.com/lewing/dotnet-replay
 
-2. **Add Repository Secret**
+2. **Create the `release` Environment**
+   - Go to **Settings** → **Environments**
+   - Click **New environment**
+   - Name: `release`
+   - Click **Configure environment**
+   - (Optional) Add protection rules if desired
+   - Click **Save protection rules**
+
+### 3. Add GitHub Secret
+
+1. **Add Repository Secret**
    - Go to **Settings** → **Secrets and variables** → **Actions**
    - Click **New repository secret**
-   - Name: `NUGET_USERNAME`
+   - Name: `NUGET_USER`
    - Value: Your NuGet.org **username** (NOT your email address)
      - Find this at https://nuget.org/account → Profile → Username
    - Click **Add secret**
 
 ## How to Publish
 
-Once setup is complete, you can publish in two ways:
-
-### Option 1: Push a Version Tag (Recommended)
+Once setup is complete, you can publish by pushing a version tag:
 
 ```bash
 # Create and push a version tag
@@ -60,16 +68,10 @@ git push origin v0.1.0
 
 The workflow automatically:
 - Extracts the version (`v0.1.0` → `0.1.0`)
+- Validates the tag version matches `dotnet-replay.csproj`
 - Builds and packs the project
+- Creates a GitHub Release with the nupkg attached
 - Publishes to NuGet.org
-
-### Option 2: Manual Workflow Dispatch
-
-1. Go to **Actions** tab in GitHub
-2. Select **Publish to NuGet** workflow
-3. Click **Run workflow**
-4. Enter the version (e.g., `0.1.0` without the `v` prefix)
-5. Click **Run workflow**
 
 ## Verifying the First Publish
 
@@ -98,23 +100,24 @@ The workflow automatically:
 - If you need to republish the same version, delete it on NuGet first (not recommended for production)
 
 ### Workflow fails on "NuGet login"
-- Check that `NUGET_USERNAME` is your NuGet.org username, NOT email
+- Check that `NUGET_USER` secret is your NuGet.org username, NOT email
 - Verify you have permissions to publish packages under the chosen policy owner
+- Ensure the `release` environment is created in GitHub Settings
 
 ## Workflow Details
 
 **Triggers:**
 - `push` on tags matching `v*` (e.g., `v0.1.0`, `v1.2.3-beta`)
-- `workflow_dispatch` (manual trigger with version input)
 
 **Process:**
 1. Checkout code
 2. Setup .NET 9.0
-3. Extract version from tag or manual input
-4. Restore, build, and pack
-5. Login to NuGet via OIDC (gets 1-hour temp key)
-6. Push package to NuGet.org
-7. Upload artifact to GitHub Actions
+3. Extract version from tag
+4. Validate version in `dotnet-replay.csproj` matches the tag
+5. Pack the project
+6. Create a GitHub Release with the nupkg attached
+7. Login to NuGet via OIDC (gets 1-hour temp key)
+8. Push package to NuGet.org
 
 **Security:**
 - Uses `id-token: write` permission for OIDC
