@@ -7,11 +7,13 @@
 #:property RepositoryUrl=https://github.com/lewing/dotnet-replay
 #:property PackageTags=copilot;transcript;viewer;waza;evaluation;cli
 #:property PublishAot=false
+#:package Spectre.Console@0.49.1
 
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Spectre.Console;
 
 Console.OutputEncoding = Encoding.UTF8;
 
@@ -65,19 +67,23 @@ for (int i = 0; i < cliArgs.Length; i++)
 }
 
 // Auto-select stream mode when output is redirected (piped to file or another process)
-if (Console.IsOutputRedirected) streamMode = true;
+if (Console.IsOutputRedirected)
+{
+    streamMode = true;
+    noColor = true; // Markup can't render to redirected output
+}
 
 if (filePath is null) { Console.Error.WriteLine("Error: No file specified"); PrintHelp(); return; }
 if (!File.Exists(filePath)) { Console.Error.WriteLine($"Error: File not found: {filePath}"); return; }
 
-// --- Color helpers ---
-string Blue(string s) => noColor ? s : $"\x1b[34m{s}\x1b[0m";
-string Green(string s) => noColor ? s : $"\x1b[32m{s}\x1b[0m";
-string Yellow(string s) => noColor ? s : $"\x1b[33m{s}\x1b[0m";
-string Red(string s) => noColor ? s : $"\x1b[31m{s}\x1b[0m";
-string Dim(string s) => noColor ? s : $"\x1b[2m{s}\x1b[0m";
-string Bold(string s) => noColor ? s : $"\x1b[1m{s}\x1b[0m";
-string Cyan(string s) => noColor ? s : $"\x1b[36m{s}\x1b[0m";
+// --- Color helpers (Spectre.Console markup) ---
+string Blue(string s) => noColor ? s : $"[blue]{Markup.Escape(s)}[/]";
+string Green(string s) => noColor ? s : $"[green]{Markup.Escape(s)}[/]";
+string Yellow(string s) => noColor ? s : $"[yellow]{Markup.Escape(s)}[/]";
+string Red(string s) => noColor ? s : $"[red]{Markup.Escape(s)}[/]";
+string Dim(string s) => noColor ? s : $"[dim]{Markup.Escape(s)}[/]";
+string Bold(string s) => noColor ? s : $"[bold]{Markup.Escape(s)}[/]";
+string Cyan(string s) => noColor ? s : $"[cyan]{Markup.Escape(s)}[/]";
 string Separator()
 {
     int width = 80;
@@ -92,10 +98,12 @@ string Separator()
     return Dim(new string('─', Math.Min(width, 120)));
 }
 
+string StripMarkup(string s) => Regex.Replace(s, @"\[/?[a-zA-Z_ ]+\]", "");
+
 string PadVisible(string s, int totalWidth)
 {
-    // Strip ANSI codes to measure visible length, then pad with spaces
-    var visible = System.Text.RegularExpressions.Regex.Replace(s, @"\x1b\[[0-9;]*m", "");
+    // Strip Spectre markup tags to measure visible length, then pad with spaces
+    var visible = StripMarkup(s);
     int padding = totalWidth - visible.Length;
     return padding > 0 ? s + new string(' ', padding) : s;
 }
@@ -739,8 +747,8 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
     FileSystemWatcher? watcher = null;
 
     // Track terminal dimensions for resize detection
-    int lastWidth = Console.WindowWidth > 0 ? Console.WindowWidth : 80;
-    int lastHeight = Console.WindowHeight > 0 ? Console.WindowHeight : 24;
+    int lastWidth = AnsiConsole.Profile.Width;
+    int lastHeight = AnsiConsole.Profile.Height;
     bool needsFullClear = true; // first render does a full clear
 
     // Build compact info bar
@@ -756,8 +764,8 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
     int filterIndex = currentFilter is null ? 0 : Array.IndexOf(filterCycle, currentFilter);
     if (filterIndex < 0) filterIndex = 0;
 
-    string StripAnsi(string s) => Regex.Replace(s, @"\x1b\[[0-9;]*m", "");
-    string HighlightLine(string s) => noColor ? s : $"\x1b[46m\x1b[30m{StripAnsi(s)}\x1b[0m";
+    string StripAnsi(string s) => StripMarkup(s);
+    string HighlightLine(string s) => noColor ? s : $"[on cyan black]{Markup.Escape(StripMarkup(s))}[/]";
 
     void RebuildContent()
     {
@@ -791,32 +799,35 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
 
     int ViewportHeight()
     {
-        int h = Console.WindowHeight > 0 ? Console.WindowHeight : 24;
+        int h = AnsiConsole.Profile.Height;
         // 1 info bar line + 1 status bar line = 2 chrome lines
         return Math.Max(1, h - 2);
     }
 
-    void WriteLine(int row, string text, int width)
+    void WriteMarkupLine(int row, string markupText, int width)
     {
-        Console.SetCursorPosition(0, row);
-        // Truncate visible content to terminal width and pad to overwrite stale content
-        var visible = StripAnsi(text);
-        if (visible.Length >= width)
+        AnsiConsole.Cursor.SetPosition(0, row + 1); // Spectre uses 1-based positions
+        var visible = StripAnsi(markupText);
+        if (noColor)
         {
-            // Need to truncate — but preserve ANSI codes up to the visible width
-            Console.Write(text);
-            // Ensure we don't leave stale chars beyond what we wrote
+            if (visible.Length < width)
+                Console.Write(visible + new string(' ', width - visible.Length));
+            else
+                Console.Write(visible);
         }
         else
         {
-            Console.Write(text + new string(' ', width - visible.Length));
+            if (visible.Length < width)
+                AnsiConsole.Markup(markupText + new string(' ', width - visible.Length));
+            else
+                AnsiConsole.Markup(markupText);
         }
     }
 
     void Render()
     {
-        int w = Console.WindowWidth > 0 ? Console.WindowWidth : 80;
-        int h = Console.WindowHeight > 0 ? Console.WindowHeight : 24;
+        int w = AnsiConsole.Profile.Width;
+        int h = AnsiConsole.Profile.Height;
 
         // Detect terminal resize
         if (w != lastWidth || h != lastHeight)
@@ -828,7 +839,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
 
         if (needsFullClear)
         {
-            Console.Clear();
+            AnsiConsole.Clear();
             needsFullClear = false;
         }
 
@@ -837,12 +848,15 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
         int row = 0;
 
         // Row 0: Compact info bar (inverted)
-        string topBar = " " + infoBar;
-        var visibleTop = StripAnsi(topBar);
-        if (visibleTop.Length < w)
-            topBar += new string(' ', w - visibleTop.Length);
-        Console.SetCursorPosition(0, row);
-        Console.Write(noColor ? topBar : $"\x1b[7m{topBar}\x1b[0m");
+        string topBarContent = " " + Markup.Escape(infoBar);
+        int topBarVisLen = topBarContent.Length;
+        if (topBarVisLen < w)
+            topBarContent += new string(' ', w - topBarVisLen);
+        AnsiConsole.Cursor.SetPosition(0, 1); // 1-based
+        if (noColor)
+            Console.Write(topBarContent);
+        else
+            AnsiConsole.Markup($"[invert]{topBarContent}[/]");
         row++;
 
         // Content viewport
@@ -855,13 +869,13 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
             int overlayLines = Math.Min(headerLines.Count, vpHeight);
             for (int i = 0; i < overlayLines; i++)
             {
-                WriteLine(row, headerLines[i], w);
+                WriteMarkupLine(row, headerLines[i], w);
                 row++;
             }
             // Fill rest of viewport
             for (int i = overlayLines; i < vpHeight; i++)
             {
-                Console.SetCursorPosition(0, row);
+                AnsiConsole.Cursor.SetPosition(0, row + 1);
                 Console.Write(new string(' ', w));
                 row++;
             }
@@ -872,7 +886,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
             {
                 var line = contentLines[i];
                 bool isMatch = searchPattern is not null && searchMatches.Contains(i);
-                WriteLine(row, isMatch ? HighlightLine(line) : line, w);
+                WriteMarkupLine(row, isMatch ? HighlightLine(line) : line, w);
                 row++;
             }
 
@@ -880,7 +894,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
             int rendered = end - scrollOffset;
             for (int i = rendered; i < vpHeight; i++)
             {
-                Console.SetCursorPosition(0, row);
+                AnsiConsole.Cursor.SetPosition(0, row + 1);
                 Console.Write(new string(' ', w));
                 row++;
             }
@@ -889,29 +903,33 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
         // Status bar (bottom line)
         var statusFilter = filterIndex == 0 ? "all" : filterCycle[filterIndex];
         int currentLine = contentLines.Count == 0 ? 0 : scrollOffset + 1;
-        string statusBar;
+        string statusText;
         if (showInfoOverlay)
         {
-            statusBar = " Press i or any key to dismiss";
+            statusText = " Press i or any key to dismiss";
         }
         else if (inSearchMode)
         {
-            statusBar = $" Search: {searchBuffer}_";
+            statusText = $" Search: {searchBuffer}_";
         }
         else if (searchPattern is not null && searchMatches.Count > 0)
         {
-            statusBar = $" Search: \"{searchPattern}\" ({searchMatchIndex + 1}/{searchMatches.Count}) | n/N next/prev | Esc clear";
+            statusText = $" Search: \"{searchPattern}\" ({searchMatchIndex + 1}/{searchMatches.Count}) | n/N next/prev | Esc clear";
         }
         else
         {
             var followIndicator = following ? (userAtBottom ? " LIVE" : " [new content ↓]") : "";
-            statusBar = $" Line {currentLine}/{contentLines.Count} | Filter: {statusFilter}{followIndicator} | \u2191\u2193 j/k scroll | Space page | / search | q quit";
+            statusText = $" Line {currentLine}/{contentLines.Count} | Filter: {statusFilter}{followIndicator} | \u2191\u2193 j/k scroll | Space page | / search | q quit";
         }
-        var visibleStatus = StripAnsi(statusBar);
-        if (visibleStatus.Length < w)
-            statusBar += new string(' ', w - visibleStatus.Length);
-        Console.SetCursorPosition(0, row);
-        Console.Write(noColor ? statusBar : $"\x1b[7m{statusBar}\x1b[0m");
+        var escapedStatus = Markup.Escape(statusText);
+        int statusVisLen = statusText.Length;
+        if (statusVisLen < w)
+            escapedStatus += new string(' ', w - statusVisLen);
+        AnsiConsole.Cursor.SetPosition(0, row + 1);
+        if (noColor)
+            Console.Write(statusText + (statusText.Length < w ? new string(' ', w - statusText.Length) : ""));
+        else
+            AnsiConsole.Markup($"[invert]{escapedStatus}[/]");
 
         Console.CursorVisible = true;
     }
@@ -921,7 +939,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
     {
         e.Cancel = true;
         Console.CursorVisible = true;
-        Console.Clear();
+        AnsiConsole.Clear();
         Environment.Exit(0);
     };
 
@@ -1191,7 +1209,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
     {
         watcher?.Dispose();
         Console.CursorVisible = true;
-        Console.Clear();
+        AnsiConsole.Clear();
     }
 }
 
@@ -1204,20 +1222,40 @@ void StreamEventsJsonl(string path)
 
     // Header card
     foreach (var line in RenderJsonlHeaderLines(d))
-        Console.WriteLine(line);
+    {
+        if (noColor)
+            Console.WriteLine(StripMarkup(line));
+        else
+            AnsiConsole.MarkupLine(line);
+    }
 
     // Content
     foreach (var line in RenderJsonlContentLines(d, filterType, expandTools))
-        Console.WriteLine(line);
+    {
+        if (noColor)
+            Console.WriteLine(StripMarkup(line));
+        else
+            AnsiConsole.MarkupLine(line);
+    }
 }
 
 void StreamWazaTranscript(JsonDocument doc)
 {
     var d = ParseWazaData(doc);
     foreach (var line in RenderWazaHeaderLines(d))
-        Console.WriteLine(line);
+    {
+        if (noColor)
+            Console.WriteLine(StripMarkup(line));
+        else
+            AnsiConsole.MarkupLine(line);
+    }
     foreach (var line in RenderWazaContentLines(d, filterType, expandTools))
-        Console.WriteLine(line);
+    {
+        if (noColor)
+            Console.WriteLine(StripMarkup(line));
+        else
+            AnsiConsole.MarkupLine(line);
+    }
 }
 
 void PrintHelp()
