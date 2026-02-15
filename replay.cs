@@ -87,15 +87,8 @@ string Cyan(string s) => noColor ? s : $"[cyan]{Markup.Escape(s)}[/]";
 string Separator()
 {
     int width = 80;
-    try
-    {
-        width = Console.WindowWidth > 0 ? Console.WindowWidth : 80;
-    }
-    catch (IOException)
-    {
-        // No console available (redirected), use default
-    }
-    return Dim(new string('─', Math.Min(width, 120)));
+    try { width = AnsiConsole.Profile.Width; } catch { }
+    return Dim(new string('─', Math.Max(1, width - 1)));
 }
 
 string StripMarkup(string s) => Regex.Replace(s, @"\[/?\]|\[/?(?:blue|green|yellow|red|dim|bold|cyan|invert|on cyan black)\]", "");
@@ -497,18 +490,25 @@ string BuildWazaInfoBar(WazaData d)
 List<string> RenderJsonlHeaderLines(JsonlData d)
 {
     var lines = new List<string>();
+    int boxWidth = Math.Max(40, AnsiConsole.Profile.Width - 2);
+    int inner = boxWidth - 2;
+    string top = Bold(Cyan("╭" + new string('─', inner) + "╮"));
+    string mid = Bold(Cyan("├" + new string('─', inner) + "┤"));
+    string bot = Bold(Cyan("╰" + new string('─', inner) + "╯"));
+    string Row(string content) => Bold(Cyan("│")) + PadVisible(content, inner) + Bold(Cyan("│"));
+
     lines.Add("");
-    lines.Add(Bold(Cyan("╭─────────────────────────────────────────────────────╮")));
-    lines.Add(Bold(Cyan("│")) + Bold("  📋 Copilot CLI Session Log                         ") + Bold(Cyan("│")));
-    lines.Add(Bold(Cyan("├─────────────────────────────────────────────────────┤")));
-    if (d.SessionId != "") lines.Add(Bold(Cyan("│")) + PadVisible($"  Session:  {Dim(d.SessionId)}", 53) + Bold(Cyan("│")));
-    if (d.StartTime.HasValue) lines.Add(Bold(Cyan("│")) + PadVisible($"  Started:  {Dim(d.StartTime.Value.ToString("yyyy-MM-dd HH:mm:ss"))}", 53) + Bold(Cyan("│")));
-    if (d.Branch != "") lines.Add(Bold(Cyan("│")) + PadVisible($"  Branch:   {Dim(d.Branch)}", 53) + Bold(Cyan("│")));
-    if (d.CopilotVersion != "") lines.Add(Bold(Cyan("│")) + PadVisible($"  Version:  {Dim(d.CopilotVersion)}", 53) + Bold(Cyan("│")));
+    lines.Add(top);
+    lines.Add(Row(Bold("  📋 Copilot CLI Session Log")));
+    lines.Add(mid);
+    if (d.SessionId != "") lines.Add(Row($"  Session:  {Dim(d.SessionId)}"));
+    if (d.StartTime.HasValue) lines.Add(Row($"  Started:  {Dim(d.StartTime.Value.ToString("yyyy-MM-dd HH:mm:ss"))}"));
+    if (d.Branch != "") lines.Add(Row($"  Branch:   {Dim(d.Branch)}"));
+    if (d.CopilotVersion != "") lines.Add(Row($"  Version:  {Dim(d.CopilotVersion)}"));
     var duration = (d.StartTime.HasValue && d.EndTime.HasValue) ? d.EndTime.Value - d.StartTime.Value : TimeSpan.Zero;
-    lines.Add(Bold(Cyan("│")) + PadVisible($"  Events:   {Dim(d.EventCount.ToString())}", 53) + Bold(Cyan("│")));
-    lines.Add(Bold(Cyan("│")) + PadVisible($"  Duration: {Dim(FormatRelativeTime(duration))}", 53) + Bold(Cyan("│")));
-    lines.Add(Bold(Cyan("╰─────────────────────────────────────────────────────╯")));
+    lines.Add(Row($"  Events:   {Dim(d.EventCount.ToString())}"));
+    lines.Add(Row($"  Duration: {Dim(FormatRelativeTime(duration))}"));
+    lines.Add(bot);
     lines.Add("");
     return lines;
 }
@@ -517,13 +517,19 @@ List<string> RenderWazaHeaderLines(WazaData d)
 {
     var lines = new List<string>();
     double avgScore = d.Validations.Count > 0 ? d.Validations.Average(v => v.score) : 0;
+    int boxWidth = Math.Max(40, AnsiConsole.Profile.Width - 2);
+    int inner = boxWidth - 2;
+    string top = Bold(Cyan("╭" + new string('─', inner) + "╮"));
+    string mid = Bold(Cyan("├" + new string('─', inner) + "┤"));
+    string bot = Bold(Cyan("╰" + new string('─', inner) + "╯"));
+    string Row(string content) => Bold(Cyan("│")) + PadVisible(content, inner) + Bold(Cyan("│"));
 
     lines.Add("");
-    lines.Add(Bold(Cyan("╭─────────────────────────────────────────────────────╮")));
-    lines.Add(Bold(Cyan("│")) + Bold("  🧪 Waza Eval Transcript                             ") + Bold(Cyan("│")));
-    lines.Add(Bold(Cyan("├─────────────────────────────────────────────────────┤")));
-    if (d.TaskName != "") lines.Add(Bold(Cyan("│")) + PadVisible($"  Task:     {Bold(d.TaskName)}", 53) + Bold(Cyan("│")));
-    if (d.TaskId != "") lines.Add(Bold(Cyan("│")) + PadVisible($"  ID:       {Dim(d.TaskId)}", 53) + Bold(Cyan("│")));
+    lines.Add(top);
+    lines.Add(Row(Bold("  🧪 Waza Eval Transcript")));
+    lines.Add(mid);
+    if (d.TaskName != "") lines.Add(Row($"  Task:     {Bold(d.TaskName)}"));
+    if (d.TaskId != "") lines.Add(Row($"  ID:       {Dim(d.TaskId)}"));
     if (d.Status != "")
     {
         var statusStr = d.Status.ToLowerInvariant() switch
@@ -532,20 +538,20 @@ List<string> RenderWazaHeaderLines(WazaData d)
             "failed" => Red("❌ FAIL"),
             _ => Red($"⚠ {d.Status.ToUpperInvariant()}")
         };
-        lines.Add(Bold(Cyan("│")) + PadVisible($"  Status:   {statusStr}", 53) + Bold(Cyan("│")));
+        lines.Add(Row($"  Status:   {statusStr}"));
     }
     if (d.Validations.Count > 0)
     {
         Func<string, string> scoreFn = avgScore >= 0.7 ? Green : Red;
-        lines.Add(Bold(Cyan("│")) + PadVisible($"  Score:    {scoreFn($"{avgScore:P0}")}", 53) + Bold(Cyan("│")));
+        lines.Add(Row($"  Score:    {scoreFn($"{avgScore:P0}")}"));
     }
     if (d.DurationMs > 0)
-        lines.Add(Bold(Cyan("│")) + PadVisible($"  Duration: {Dim(FormatRelativeTime(TimeSpan.FromMilliseconds(d.DurationMs)))}", 53) + Bold(Cyan("│")));
+        lines.Add(Row($"  Duration: {Dim(FormatRelativeTime(TimeSpan.FromMilliseconds(d.DurationMs)))}"));
     if (d.ToolCallCount > 0)
-        lines.Add(Bold(Cyan("│")) + PadVisible($"  Tools:    {Dim($"{d.ToolCallCount} calls")}", 53) + Bold(Cyan("│")));
+        lines.Add(Row($"  Tools:    {Dim($"{d.ToolCallCount} calls")}"));
     if (d.TokensIn > 0 || d.TokensOut > 0)
-        lines.Add(Bold(Cyan("│")) + PadVisible($"  Tokens:   {Dim($"in={d.TokensIn}, out={d.TokensOut}")}", 53) + Bold(Cyan("│")));
-    lines.Add(Bold(Cyan("╰─────────────────────────────────────────────────────╯")));
+        lines.Add(Row($"  Tokens:   {Dim($"in={d.TokensIn}, out={d.TokensOut}")}"));
+    lines.Add(bot);
 
     if (d.Validations.Count > 0)
     {
@@ -1085,6 +1091,22 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
 
             if (!Console.KeyAvailable)
             {
+                // Check for terminal resize
+                int curW = AnsiConsole.Profile.Width;
+                int curH = AnsiConsole.Profile.Height;
+                if (curW != lastWidth || curH != lastHeight)
+                {
+                    lastWidth = curW;
+                    lastHeight = curH;
+                    // Rebuild header/content since header boxes are now width-dependent
+                    if (isJsonlFormat && parsedData is JsonlData jdResize)
+                        headerLines = RenderJsonlHeaderLines(jdResize);
+                    else if (parsedData is WazaData wdResize)
+                        headerLines = RenderWazaHeaderLines(wdResize);
+                    RebuildContent();
+                    needsFullClear = true;
+                    Render();
+                }
                 Thread.Sleep(50);
                 continue;
             }

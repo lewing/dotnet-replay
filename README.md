@@ -26,6 +26,14 @@ dotnet tool install dotnet-replay
 
 With a local install, use `dotnet replay` instead.
 
+### Try without installing
+
+```bash
+dnx dotnet-replay session.jsonl   # Runs ephemerally via .NET 10's dnx
+```
+
+No install needed — `dnx` downloads the tool to the NuGet cache, runs it, and cleans up. Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
+
 ## Usage
 
 ### Interactive Mode (Default)
