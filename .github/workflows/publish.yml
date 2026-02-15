@@ -21,25 +21,25 @@ jobs:
         id: tag_name
         run: echo "current_version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
 
-      - name: Setup .NET 9.0
+      - name: Setup .NET 10.0
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Validate version consistency
         run: |
           TAG_VERSION="${{ steps.tag_name.outputs.current_version }}"
-          CSPROJ_VERSION=$(grep -oP '(?<=<Version>)[^<]+' dotnet-replay.csproj)
+          CSPROJ_VERSION=$(grep -oP '(?<=#:property Version=)[^\s]+' replay.cs)
           
           if [ "$TAG_VERSION" != "$CSPROJ_VERSION" ]; then
-            echo "Error: Tag version ($TAG_VERSION) does not match csproj version ($CSPROJ_VERSION)"
+            echo "Error: Tag version ($TAG_VERSION) does not match replay.cs version ($CSPROJ_VERSION)"
             exit 1
           fi
           
           echo "All versions match tag: ${TAG_VERSION}"
 
       - name: Pack
-        run: dotnet pack -c Release -o nupkg /p:Version=${{ steps.tag_name.outputs.current_version }}
+        run: dotnet pack replay.cs -c Release -o nupkg /p:Version=${{ steps.tag_name.outputs.current_version }}
 
       - name: Create Release
         uses: ncipollo/release-action@v1
