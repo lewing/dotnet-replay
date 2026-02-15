@@ -1,11 +1,13 @@
 # dotnet-replay
 
-Interactive terminal viewer for Copilot CLI sessions and [waza](https://github.com/spboyer/waza) evaluation transcripts.
+Interactive terminal viewer for Copilot CLI sessions and [waza](https://github.com/spboyer/waza) evaluation transcripts. Built as a single-file .NET 10 app — no project file needed.
 
 <img width="2750" height="1555" alt="image" src="https://github.com/user-attachments/assets/75114d1a-965b-44da-bbda-33583486ba93" />
 
 
 ## Install
+
+Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
 
 ### Global tool (recommended)
 
@@ -35,9 +37,12 @@ replay <file> --expand-tools # Show tool call arguments and results
 replay <file> --full        # Don't truncate long content
 replay <file> --filter user # Filter by event type (user, assistant, tool, error)
 replay <file> --no-color    # Disable ANSI colors
+replay session.jsonl --no-follow  # Disable auto-follow for JSONL files
 ```
 
 > **Note:** `dotnet replay` also works if you prefer the explicit prefix.
+
+> **Auto-follow:** JSONL files automatically watch for new content (like `tail -f`). Use `--no-follow` to disable this behavior.
 
 ### Stream Mode (Non-Interactive)
 
