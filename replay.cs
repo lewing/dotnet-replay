@@ -140,6 +140,87 @@ string TruncateToWidth(string s, int maxWidth)
     return s[..i];
 }
 
+string TruncateMarkupToWidth(string markupText, int maxWidth)
+{
+    var result = new StringBuilder();
+    var openTags = new Stack<string>();
+    int visWidth = 0;
+    int i = 0;
+    while (i < markupText.Length && visWidth < maxWidth)
+    {
+        // Check for escaped brackets [[ or ]]
+        if (i + 1 < markupText.Length && markupText[i] == '[' && markupText[i + 1] == '[')
+        {
+            if (visWidth + 1 > maxWidth) break;
+            result.Append("[[");
+            visWidth++;
+            i += 2;
+            continue;
+        }
+        if (i + 1 < markupText.Length && markupText[i] == ']' && markupText[i + 1] == ']')
+        {
+            if (visWidth + 1 > maxWidth) break;
+            result.Append("]]");
+            visWidth++;
+            i += 2;
+            continue;
+        }
+        // Check for markup tags [xxx] or [/xxx] or [/]
+        if (markupText[i] == '[')
+        {
+            int closeIdx = markupText.IndexOf(']', i + 1);
+            if (closeIdx > i)
+            {
+                var tag = markupText[(i + 1)..closeIdx];
+                result.Append(markupText[i..(closeIdx + 1)]);
+                if (tag == "/" || tag.StartsWith("/"))
+                {
+                    if (openTags.Count > 0) openTags.Pop();
+                }
+                else
+                {
+                    openTags.Push(tag);
+                }
+                i = closeIdx + 1;
+                continue;
+            }
+        }
+        // Regular character — check width
+        try
+        {
+            var rune = Rune.GetRuneAt(markupText, i);
+            int charWidth = (rune.Value >= 0x1100 && (
+                (rune.Value <= 0x115F) ||
+                (rune.Value >= 0x2E80 && rune.Value <= 0x9FFF) ||
+                (rune.Value >= 0xF900 && rune.Value <= 0xFAFF) ||
+                (rune.Value >= 0xFE30 && rune.Value <= 0xFE6F) ||
+                (rune.Value >= 0xFF01 && rune.Value <= 0xFF60) ||
+                (rune.Value >= 0x1F000))) ? 2 : 1;
+            if (visWidth + charWidth > maxWidth) break;
+            result.Append(markupText.AsSpan(i, rune.Utf16SequenceLength));
+            visWidth += charWidth;
+            i += rune.Utf16SequenceLength;
+        }
+        catch
+        {
+            // Invalid surrogate pair — treat as single-width character
+            if (visWidth + 1 > maxWidth) break;
+            result.Append(markupText[i]);
+            visWidth++;
+            i++;
+        }
+    }
+    // Append ellipsis inside the current markup context if truncated, then close open tags
+    bool wasTruncated = i < markupText.Length;
+    if (wasTruncated) result.Append('…');
+    while (openTags.Count > 0)
+    {
+        openTags.Pop();
+        result.Append("[/]");
+    }
+    return result.ToString();
+}
+
 string PadVisible(string s, int totalWidth)
 {
     var visible = GetVisibleText(s);
@@ -863,13 +944,20 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
         int visWidth = VisibleWidth(visible);
         if (visWidth >= width)
         {
-            var truncated = TruncateToWidth(visible, width - 1) + "…";
             if (noColor)
+            {
+                var truncated = TruncateToWidth(visible, width - 1) + "…";
                 Console.Write(truncated);
+            }
             else
             {
-                try { AnsiConsole.Markup($"[dim]{Markup.Escape(truncated)}[/]"); }
-                catch { Console.Write(truncated); }
+                var truncatedMarkup = TruncateMarkupToWidth(markupText, width - 1);
+                try { AnsiConsole.Markup(truncatedMarkup); }
+                catch
+                {
+                    var truncated = TruncateToWidth(visible, width - 1) + "…";
+                    Console.Write(truncated);
+                }
             }
         }
         else
