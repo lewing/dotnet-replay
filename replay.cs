@@ -861,7 +861,10 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
             if (noColor)
                 Console.Write(truncated);
             else
-                AnsiConsole.Markup($"[dim]{Markup.Escape(truncated)}[/]");
+            {
+                try { AnsiConsole.Markup($"[dim]{Markup.Escape(truncated)}[/]"); }
+                catch { Console.Write(truncated); }
+            }
         }
         else
         {
@@ -869,7 +872,10 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
             if (noColor)
                 Console.Write(visible + new string(' ', padding));
             else
-                AnsiConsole.Markup(markupText + new string(' ', padding));
+            {
+                try { AnsiConsole.Markup(markupText + new string(' ', padding)); }
+                catch { Console.Write(visible + new string(' ', padding)); }
+            }
         }
     }
 
@@ -905,7 +911,10 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
         if (noColor)
             Console.Write(topBarContent);
         else
-            AnsiConsole.Markup($"[invert]{topBarContent}[/]");
+        {
+            try { AnsiConsole.Markup($"[invert]{topBarContent}[/]"); }
+            catch { Console.Write(topBarContent.Replace("[[", "[").Replace("]]", "]")); }
+        }
         row++;
 
         // Content viewport
@@ -978,7 +987,10 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
         if (noColor)
             Console.Write(statusText + (VisibleWidth(statusText) < w ? new string(' ', w - VisibleWidth(statusText)) : ""));
         else
-            AnsiConsole.Markup($"[invert]{escapedStatus}[/]");
+        {
+            try { AnsiConsole.Markup($"[invert]{escapedStatus}[/]"); }
+            catch { Console.Write(statusText + (VisibleWidth(statusText) < w ? new string(' ', w - VisibleWidth(statusText)) : "")); }
+        }
 
         Console.CursorVisible = true;
     }
@@ -1275,7 +1287,10 @@ void StreamEventsJsonl(string path)
         if (noColor)
             Console.WriteLine(StripMarkup(line));
         else
-            AnsiConsole.MarkupLine(line);
+        {
+            try { AnsiConsole.MarkupLine(line); }
+            catch { Console.WriteLine(StripMarkup(line)); }
+        }
     }
 
     // Content
@@ -1284,7 +1299,10 @@ void StreamEventsJsonl(string path)
         if (noColor)
             Console.WriteLine(StripMarkup(line));
         else
-            AnsiConsole.MarkupLine(line);
+        {
+            try { AnsiConsole.MarkupLine(line); }
+            catch { Console.WriteLine(StripMarkup(line)); }
+        }
     }
 }
 
@@ -1296,14 +1314,20 @@ void StreamWazaTranscript(JsonDocument doc)
         if (noColor)
             Console.WriteLine(StripMarkup(line));
         else
-            AnsiConsole.MarkupLine(line);
+        {
+            try { AnsiConsole.MarkupLine(line); }
+            catch { Console.WriteLine(StripMarkup(line)); }
+        }
     }
     foreach (var line in RenderWazaContentLines(d, filterType, expandTools))
     {
         if (noColor)
             Console.WriteLine(StripMarkup(line));
         else
-            AnsiConsole.MarkupLine(line);
+        {
+            try { AnsiConsole.MarkupLine(line); }
+            catch { Console.WriteLine(StripMarkup(line)); }
+        }
     }
 }
 
