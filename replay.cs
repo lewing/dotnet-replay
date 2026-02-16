@@ -20,6 +20,7 @@ using Markdig.Syntax.Inlines;
 using Spectre.Console;
 
 Console.OutputEncoding = Encoding.UTF8;
+var markdownPipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
 
 // --- CLI argument parsing ---
 var cliArgs = Environment.GetCommandLineArgs().Skip(1).ToArray();
@@ -123,13 +124,13 @@ string Separator()
 }
 
 // --- Markdown rendering via Markdig ---
+
 List<string> RenderMarkdownLines(string markdown, string colorName, string prefix = "┃ ")
 {
     if (noColor || string.IsNullOrEmpty(markdown))
         return markdown.Split('\n').Select(l => $"{prefix}{l}").ToList();
 
-    var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
-    var doc = Markdown.Parse(markdown, pipeline);
+    var doc = Markdown.Parse(markdown, markdownPipeline);
     var result = new List<string>();
 
     foreach (var block in doc)
@@ -336,27 +337,23 @@ string StripMarkup(string s)
     return s;
 }
 
-string GetVisibleText(string s)
-{
-    // StripMarkup now handles escaped brackets internally
-    return StripMarkup(s);
-}
+string GetVisibleText(string s) => StripMarkup(s);
+
+int RuneWidth(Rune rune) =>
+    (rune.Value >= 0x1100 && (
+        (rune.Value <= 0x115F) ||
+        (rune.Value >= 0x2E80 && rune.Value <= 0x9FFF) ||
+        (rune.Value >= 0xF900 && rune.Value <= 0xFAFF) ||
+        (rune.Value >= 0xFE30 && rune.Value <= 0xFE6F) ||
+        (rune.Value >= 0xFF01 && rune.Value <= 0xFF60) ||
+        (rune.Value >= 0x1F000))) ? 2 : 1;
 
 int VisibleWidth(string s)
 {
     int width = 0;
     foreach (var rune in s.EnumerateRunes())
     {
-        if (rune.Value >= 0x1100 && (
-            (rune.Value <= 0x115F) ||
-            (rune.Value >= 0x2E80 && rune.Value <= 0x9FFF) ||
-            (rune.Value >= 0xF900 && rune.Value <= 0xFAFF) ||
-            (rune.Value >= 0xFE30 && rune.Value <= 0xFE6F) ||
-            (rune.Value >= 0xFF01 && rune.Value <= 0xFF60) ||
-            (rune.Value >= 0x1F000)))
-            width += 2;
-        else
-            width += 1;
+        width += RuneWidth(rune);
     }
     return width;
 }
@@ -367,13 +364,7 @@ string TruncateToWidth(string s, int maxWidth)
     int i = 0;
     foreach (var rune in s.EnumerateRunes())
     {
-        int charWidth = (rune.Value >= 0x1100 && (
-            (rune.Value <= 0x115F) ||
-            (rune.Value >= 0x2E80 && rune.Value <= 0x9FFF) ||
-            (rune.Value >= 0xF900 && rune.Value <= 0xFAFF) ||
-            (rune.Value >= 0xFE30 && rune.Value <= 0xFE6F) ||
-            (rune.Value >= 0xFF01 && rune.Value <= 0xFF60) ||
-            (rune.Value >= 0x1F000))) ? 2 : 1;
+        int charWidth = RuneWidth(rune);
         if (width + charWidth > maxWidth) break;
         width += charWidth;
         i += rune.Utf16SequenceLength;
@@ -430,13 +421,7 @@ string TruncateMarkupToWidth(string markupText, int maxWidth)
         try
         {
             var rune = Rune.GetRuneAt(markupText, i);
-            int charWidth = (rune.Value >= 0x1100 && (
-                (rune.Value <= 0x115F) ||
-                (rune.Value >= 0x2E80 && rune.Value <= 0x9FFF) ||
-                (rune.Value >= 0xF900 && rune.Value <= 0xFAFF) ||
-                (rune.Value >= 0xFE30 && rune.Value <= 0xFE6F) ||
-                (rune.Value >= 0xFF01 && rune.Value <= 0xFF60) ||
-                (rune.Value >= 0x1F000))) ? 2 : 1;
+            int charWidth = RuneWidth(rune);
             if (visWidth + charWidth > maxWidth) break;
             result.Append(markupText.AsSpan(i, rune.Utf16SequenceLength));
             visWidth += charWidth;
@@ -506,13 +491,7 @@ string SkipMarkupWidth(string markupText, int skipColumns)
         try
         {
             var rune = Rune.GetRuneAt(markupText, i);
-            int charWidth = (rune.Value >= 0x1100 && (
-                (rune.Value <= 0x115F) ||
-                (rune.Value >= 0x2E80 && rune.Value <= 0x9FFF) ||
-                (rune.Value >= 0xF900 && rune.Value <= 0xFAFF) ||
-                (rune.Value >= 0xFE30 && rune.Value <= 0xFE6F) ||
-                (rune.Value >= 0xFF01 && rune.Value <= 0xFF60) ||
-                (rune.Value >= 0x1F000))) ? 2 : 1;
+            int charWidth = RuneWidth(rune);
             visWidth += charWidth;
             i += rune.Utf16SequenceLength;
         }
