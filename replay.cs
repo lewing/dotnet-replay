@@ -128,7 +128,7 @@ string Separator()
 List<string> RenderMarkdownLines(string markdown, string colorName, string prefix = "┃ ")
 {
     if (noColor || string.IsNullOrEmpty(markdown))
-        return markdown.Split('\n').Select(l => $"{prefix}{l}").ToList();
+        return SplitLines(markdown).Select(l => $"{prefix}{l}").ToList();
 
     var doc = Markdown.Parse(markdown, markdownPipeline);
     var result = new List<string>();
@@ -171,7 +171,7 @@ void RenderBlock(Block block, List<string> lines, string colorName, string prefi
         case ParagraphBlock para:
         {
             var text = RenderInlines(para.Inline);
-            foreach (var line in text.Split('\n'))
+            foreach (var line in SplitLines(text))
             {
                 // Text from RenderInlines may contain inline markup - wrap at line level
                 if (noColor)
@@ -224,7 +224,7 @@ void RenderBlock(Block block, List<string> lines, string colorName, string prefi
                         if (first && sub is ParagraphBlock p)
                         {
                             var text = RenderInlines(p.Inline);
-                            foreach (var (line, idx) in text.Split('\n').Select((l, i) => (l, i)))
+                            foreach (var (line, idx) in SplitLines(text).Select((l, i) => (l, i)))
                             {
                                 if (idx == 0)
                                 {
@@ -272,7 +272,7 @@ void RenderBlock(Block block, List<string> lines, string colorName, string prefi
         default:
         {
             // Fallback: render raw text for unknown block types
-            var rawLines = block.ToString()?.Split('\n') ?? [];
+            var rawLines = block.ToString() is string s ? SplitLines(s) : [];
             foreach (var line in rawLines)
             {
                 if (noColor)
@@ -338,6 +338,8 @@ string StripMarkup(string s)
 }
 
 string GetVisibleText(string s) => StripMarkup(s);
+
+string[] SplitLines(string s) => s.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
 
 int RuneWidth(Rune rune)
 {
@@ -550,7 +552,7 @@ List<string> FormatJsonProperties(JsonElement obj, string linePrefix, int maxVal
                 ? prop.Value.GetString() ?? ""
                 : prop.Value.GetRawText();
             var truncated = Truncate(val, maxValueLen);
-            foreach (var segment in truncated.Split('\n'))
+            foreach (var segment in SplitLines(truncated))
                 lines.Add($"{linePrefix}{prop.Name}: {segment}");
         }
     }
@@ -558,7 +560,7 @@ List<string> FormatJsonProperties(JsonElement obj, string linePrefix, int maxVal
     {
         var val = obj.GetString() ?? "";
         var truncated = Truncate(val, maxValueLen);
-        foreach (var segment in truncated.Split('\n'))
+        foreach (var segment in SplitLines(truncated))
             lines.Add($"{linePrefix}{segment}");
     }
     else
@@ -1184,7 +1186,7 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
                 var isQueued = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("queued", out var q) && q.ValueKind == JsonValueKind.True;
                 var userLabel = isQueued ? "┃ USER (queued)" : "┃ USER";
                 lines.Add(margin + Blue(userLabel));
-                foreach (var line in content.Split('\n'))
+                foreach (var line in SplitLines(content))
                     lines.Add(margin + Blue($"┃ {line}"));
                 break;
             }
@@ -1214,7 +1216,7 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
                     if (!string.IsNullOrEmpty(reasoning))
                     {
                         lines.Add(margin + Dim("┃ 💭 Thinking:"));
-                        foreach (var line in reasoning.Split('\n'))
+                        foreach (var line in SplitLines(reasoning))
                             lines.Add(margin + Dim($"┃   {line}"));
                     }
                 }
@@ -1226,7 +1228,7 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
                 var content = SafeGetString(data, "content");
                 if (string.IsNullOrEmpty(content)) break;
                 lines.Add(margin + Dim("┃ 💭 THINKING"));
-                foreach (var line in content.Split('\n'))
+                foreach (var line in SplitLines(content))
                     lines.Add(margin + Dim($"┃   {line}"));
                 break;
             }
@@ -1291,7 +1293,7 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
                     {
                         lines.Add(margin + colorFn("┃"));
                         var truncated = Truncate(resultContent, 500);
-                        foreach (var line in truncated.Split('\n').Take(full ? int.MaxValue : 20))
+                        foreach (var line in SplitLines(truncated).Take(full ? int.MaxValue : 20))
                             lines.Add(margin + colorFn($"┃   {line}"));
                     }
                 }
@@ -1350,7 +1352,7 @@ List<string> RenderWazaContentLines(WazaData d, string? filter, bool expandTool)
         if (isUserMessage)
         {
             lines.Add(margin + Blue("┃ USER"));
-            foreach (var line in content.Split('\n'))
+            foreach (var line in SplitLines(content))
                 lines.Add(margin + Blue($"┃ {line}"));
         }
         else if (isAssistantMessage)
@@ -1381,7 +1383,7 @@ List<string> RenderWazaContentLines(WazaData d, string? filter, bool expandTool)
                     else
                     {
                         var truncated = Truncate(resStr, 500);
-                        var resLines = truncated.Split('\n').Take(full ? int.MaxValue : 20).ToArray();
+                        var resLines = SplitLines(truncated).Take(full ? int.MaxValue : 20).ToArray();
                         if (resLines.Length > 0)
                             lines.Add(margin + Dim($"┃   Result: {resLines[0]}"));
                         foreach (var line in resLines.Skip(1))
@@ -1491,6 +1493,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
         
         // Apply horizontal scroll offset
         var scrolledMarkup = hOffset > 0 ? SkipMarkupWidth(markupText, hOffset) : markupText;
+        scrolledMarkup = scrolledMarkup.Replace("\r", "");
         var visible = StripAnsi(scrolledMarkup);
         int visWidth = VisibleWidth(visible);
         
