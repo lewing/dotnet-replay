@@ -73,7 +73,34 @@ if (Console.IsOutputRedirected)
     noColor = true; // Markup can't render to redirected output
 }
 
-if (filePath is null) { Console.Error.WriteLine("Error: No file specified"); PrintHelp(); return; }
+// Resolve session ID or browse sessions if no file given
+var sessionStateDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".copilot", "session-state");
+
+if (filePath is not null && Guid.TryParse(filePath, out _) && !File.Exists(filePath))
+{
+    // Treat as session ID
+    var sessionEventsPath = Path.Combine(sessionStateDir, filePath, "events.jsonl");
+    if (File.Exists(sessionEventsPath))
+        filePath = sessionEventsPath;
+    else
+    {
+        Console.Error.WriteLine($"Error: No session found with ID {filePath}");
+        return;
+    }
+}
+
+if (filePath is null)
+{
+    if (Console.IsOutputRedirected)
+    {
+        Console.Error.WriteLine("Error: No file specified");
+        PrintHelp();
+        return;
+    }
+    filePath = BrowseSessions(sessionStateDir);
+    if (filePath is null) return;
+}
+
 if (!File.Exists(filePath)) { Console.Error.WriteLine($"Error: File not found: {filePath}"); return; }
 
 // --- Color helpers (Spectre.Console markup) ---
@@ -1524,12 +1551,135 @@ void StreamWazaTranscript(JsonDocument doc)
     }
 }
 
+string? BrowseSessions(string sessionStateDir)
+{
+    if (!Directory.Exists(sessionStateDir))
+    {
+        Console.Error.WriteLine("No Copilot session directory found.");
+        Console.Error.WriteLine($"Expected: {sessionStateDir}");
+        return null;
+    }
+
+    // Scan sessions
+    var sessions = new List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPath, long fileSize)>();
+    foreach (var dir in Directory.GetDirectories(sessionStateDir))
+    {
+        var yamlPath = Path.Combine(dir, "workspace.yaml");
+        var eventsPath = Path.Combine(dir, "events.jsonl");
+        if (!File.Exists(yamlPath) || !File.Exists(eventsPath)) continue;
+
+        var props = new Dictionary<string, string>();
+        try
+        {
+            foreach (var line in File.ReadLines(yamlPath))
+            {
+                var colonIdx = line.IndexOf(':');
+                if (colonIdx > 0)
+                {
+                    var key = line[..colonIdx].Trim();
+                    var value = line[(colonIdx + 1)..].Trim().Trim('"');
+                    props[key] = value;
+                }
+            }
+        }
+        catch { continue; }
+
+        var id = props.GetValueOrDefault("id", Path.GetFileName(dir));
+        var summary = props.GetValueOrDefault("summary", "");
+        var cwd = props.GetValueOrDefault("cwd", "");
+        var updatedStr = props.GetValueOrDefault("updated_at", "");
+        DateTime.TryParse(updatedStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var updatedAt);
+
+        long fileSize = 0;
+        try { fileSize = new FileInfo(eventsPath).Length; } catch { }
+
+        sessions.Add((id, summary, cwd, updatedAt, eventsPath, fileSize));
+    }
+
+    if (sessions.Count == 0)
+    {
+        Console.Error.WriteLine("No sessions found.");
+        return null;
+    }
+
+    sessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+
+    int pageSize = 20;
+    int page = 0;
+    int totalPages = (sessions.Count + pageSize - 1) / pageSize;
+
+    while (true)
+    {
+        AnsiConsole.Clear();
+        AnsiConsole.MarkupLine($"[bold cyan]📋 Copilot CLI Sessions[/] [dim]({sessions.Count} total, page {page + 1}/{totalPages})[/]");
+        AnsiConsole.WriteLine();
+
+        int start = page * pageSize;
+        int end = Math.Min(start + pageSize, sessions.Count);
+        for (int i = start; i < end; i++)
+        {
+            var s = sessions[i];
+            var num = (i - start + 1).ToString().PadLeft(2);
+            var age = FormatAge(DateTime.UtcNow - s.updatedAt);
+            var size = FormatFileSize(s.fileSize);
+            var display = !string.IsNullOrEmpty(s.summary) ? s.summary : s.cwd;
+            if (display.Length > 70) display = display[..67] + "...";
+            
+            try
+            {
+                AnsiConsole.Markup($"  [bold yellow]{num}[/] ");
+                AnsiConsole.Markup($"[dim]{age,6}[/] ");
+                AnsiConsole.Markup($"[dim]{size,6}[/] ");
+                AnsiConsole.MarkupLine(Markup.Escape(display));
+            }
+            catch
+            {
+                Console.WriteLine($"  {num} {age,6} {size,6} {display}");
+            }
+        }
+
+        AnsiConsole.WriteLine();
+        if (totalPages > 1)
+            AnsiConsole.MarkupLine("[dim]Enter number to open | n/p next/prev page | q quit[/]");
+        else
+            AnsiConsole.MarkupLine("[dim]Enter number to open | q quit[/]");
+        AnsiConsole.Markup("[bold]> [/]");
+
+        var input = Console.ReadLine()?.Trim();
+        if (string.IsNullOrEmpty(input) || input == "q") return null;
+        if (input == "n" && page < totalPages - 1) { page++; continue; }
+        if (input == "p" && page > 0) { page--; continue; }
+        if (int.TryParse(input, out int choice) && choice >= 1 && choice <= end - start)
+        {
+            return sessions[start + choice - 1].eventsPath;
+        }
+    }
+}
+
+string FormatAge(TimeSpan age)
+{
+    if (age.TotalMinutes < 1) return "now";
+    if (age.TotalHours < 1) return $"{(int)age.TotalMinutes}m";
+    if (age.TotalDays < 1) return $"{(int)age.TotalHours}h";
+    if (age.TotalDays < 30) return $"{(int)age.TotalDays}d";
+    return $"{(int)(age.TotalDays / 30)}mo";
+}
+
+string FormatFileSize(long bytes)
+{
+    if (bytes < 1024) return $"{bytes}B";
+    if (bytes < 1024 * 1024) return $"{bytes / 1024}KB";
+    return $"{bytes / (1024 * 1024.0):F1}MB";
+}
+
 void PrintHelp()
 {
     Console.WriteLine(@"
-Usage: transcript-viewer <file> [options]
+Usage: replay [file|session-id] [options]
 
   <file>              Path to .jsonl or .json transcript file
+  <session-id>        GUID of a Copilot CLI session to open
+  (no args)           Browse recent Copilot CLI sessions
 
 Options:
   --tail <N>          Show only the last N conversation turns
@@ -1543,7 +1693,9 @@ Options:
 
 Interactive mode (default):
   ↑/k ↓/j             Scroll up/down one line
-  ←/h/PgUp →/l/PgDn   Page up/down
+  ←/h  →/l             Scroll left/right (pan)
+  PgUp PgDn             Page up/down
+  0                     Reset horizontal scroll
   Space                Page down
   g/Home  G/End        Jump to start/end
   t                    Toggle tool expansion
