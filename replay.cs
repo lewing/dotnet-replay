@@ -15,6 +15,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Spectre.Console;
 
+#if !TESTING
 Console.OutputEncoding = Encoding.UTF8;
 
 // --- CLI argument parsing ---
@@ -128,24 +129,7 @@ string GetVisibleText(string s)
     return stripped;
 }
 
-int VisibleWidth(string s)
-{
-    int width = 0;
-    foreach (var rune in s.EnumerateRunes())
-    {
-        if (rune.Value >= 0x1100 && (
-            (rune.Value <= 0x115F) ||
-            (rune.Value >= 0x2E80 && rune.Value <= 0x9FFF) ||
-            (rune.Value >= 0xF900 && rune.Value <= 0xFAFF) ||
-            (rune.Value >= 0xFE30 && rune.Value <= 0xFE6F) ||
-            (rune.Value >= 0xFF01 && rune.Value <= 0xFF60) ||
-            (rune.Value >= 0x1F000)))
-            width += 2;
-        else
-            width += 1;
-    }
-    return width;
-}
+int VisibleWidth(string s) => ReplayHelpers.VisibleWidth(s);
 
 string TruncateToWidth(string s, int maxWidth)
 {
@@ -322,13 +306,7 @@ string PadVisible(string s, int totalWidth)
     return padding > 0 ? s + new string(' ', padding) : s;
 }
 
-string FormatRelativeTime(TimeSpan ts)
-{
-    if (ts.TotalSeconds < 0.1) return "+0.0s";
-    if (ts.TotalMinutes < 1) return $"+{ts.TotalSeconds:F1}s";
-    if (ts.TotalHours < 1) return $"+{(int)ts.TotalMinutes}m {ts.Seconds}s";
-    return $"+{(int)ts.TotalHours}h {ts.Minutes}m";
-}
+string FormatRelativeTime(TimeSpan ts) => ReplayHelpers.FormatRelativeTime(ts);
 
 string Truncate(string s, int max)
 {
@@ -384,12 +362,7 @@ string ExtractContentString(JsonElement el)
     return el.GetRawText();
 }
 
-string SafeGetString(JsonElement el, string prop)
-{
-    if (el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String)
-        return v.GetString() ?? "";
-    return "";
-}
+string SafeGetString(JsonElement el, string prop) => ReplayHelpers.SafeGetString(el, prop);
 
 // --- Format detection ---
 var firstLine = "";
@@ -523,26 +496,7 @@ JsonlData? ParseJsonlData(string path)
 }
 
 // ========== Claude Code Parser ==========
-bool IsClaudeFormat(string path)
-{
-    try
-    {
-        foreach (var line in File.ReadLines(path).Take(10))
-        {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            var doc = JsonDocument.Parse(line);
-            var root = doc.RootElement;
-            var evType = SafeGetString(root, "type");
-            if (evType is "user" or "assistant")
-            {
-                if (root.TryGetProperty("message", out var msg) && msg.TryGetProperty("role", out _))
-                    return true;
-            }
-        }
-    }
-    catch { }
-    return false;
-}
+bool IsClaudeFormat(string path) => ReplayHelpers.IsClaudeFormat(path);
 
 JsonlData? ParseClaudeData(string path)
 {
@@ -2277,21 +2231,9 @@ string? BrowseSessions(string sessionStateDir)
     }
 }
 
-string FormatAge(TimeSpan age)
-{
-    if (age.TotalMinutes < 1) return "now";
-    if (age.TotalHours < 1) return $"{(int)age.TotalMinutes}m";
-    if (age.TotalDays < 1) return $"{(int)age.TotalHours}h";
-    if (age.TotalDays < 30) return $"{(int)age.TotalDays}d";
-    return $"{(int)(age.TotalDays / 30)}mo";
-}
+string FormatAge(TimeSpan age) => ReplayHelpers.FormatAge(age);
 
-string FormatFileSize(long bytes)
-{
-    if (bytes < 1024) return $"{bytes}B";
-    if (bytes < 1024 * 1024) return $"{bytes / 1024}KB";
-    return $"{bytes / (1024 * 1024.0):F1}MB";
-}
+string FormatFileSize(long bytes) => ReplayHelpers.FormatFileSize(bytes);
 
 void PrintHelp()
 {
@@ -2329,6 +2271,82 @@ Interactive mode (default):
 JSONL files auto-follow by default (like tail -f). Use --no-follow to disable.
 When output is piped (redirected), stream mode is used automatically.
 ");
+}
+#endif
+
+// ========== Testable helpers (static class, accessible from test projects) ==========
+static class ReplayHelpers
+{
+    public static int VisibleWidth(string s)
+    {
+        int width = 0;
+        foreach (var rune in s.EnumerateRunes())
+        {
+            if (rune.Value >= 0x1100 && (
+                (rune.Value <= 0x115F) ||
+                (rune.Value >= 0x2E80 && rune.Value <= 0x9FFF) ||
+                (rune.Value >= 0xF900 && rune.Value <= 0xFAFF) ||
+                (rune.Value >= 0xFE30 && rune.Value <= 0xFE6F) ||
+                (rune.Value >= 0xFF01 && rune.Value <= 0xFF60) ||
+                (rune.Value >= 0x1F000)))
+                width += 2;
+            else
+                width += 1;
+        }
+        return width;
+    }
+
+    public static string FormatRelativeTime(TimeSpan ts)
+    {
+        if (ts.TotalSeconds < 0.1) return "+0.0s";
+        if (ts.TotalMinutes < 1) return $"+{ts.TotalSeconds:F1}s";
+        if (ts.TotalHours < 1) return $"+{(int)ts.TotalMinutes}m {ts.Seconds}s";
+        return $"+{(int)ts.TotalHours}h {ts.Minutes}m";
+    }
+
+    public static string SafeGetString(JsonElement el, string prop)
+    {
+        if (el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String)
+            return v.GetString() ?? "";
+        return "";
+    }
+
+    public static bool IsClaudeFormat(string path)
+    {
+        try
+        {
+            foreach (var line in File.ReadLines(path).Take(10))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
+                var evType = SafeGetString(root, "type");
+                if (evType is "user" or "assistant")
+                {
+                    if (root.TryGetProperty("message", out var msg) && msg.TryGetProperty("role", out _))
+                        return true;
+                }
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    public static string FormatAge(TimeSpan age)
+    {
+        if (age.TotalMinutes < 1) return "now";
+        if (age.TotalHours < 1) return $"{(int)age.TotalMinutes}m";
+        if (age.TotalDays < 1) return $"{(int)age.TotalHours}h";
+        if (age.TotalDays < 30) return $"{(int)age.TotalDays}d";
+        return $"{(int)(age.TotalDays / 30)}mo";
+    }
+
+    public static string FormatFileSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes}B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024}KB";
+        return $"{bytes / (1024 * 1024.0):F1}MB";
+    }
 }
 
 // ========== Parsed data structures (must follow top-level statements) ==========
