@@ -339,7 +339,58 @@ string StripMarkup(string s)
 
 string GetVisibleText(string s) => StripMarkup(s);
 
-string[] SplitLines(string s) => s.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+string[] SplitLines(string s) => s.Split(["\r\n", "\r", "\n"], StringSplitOptions.None);
+
+static bool IsWideEmojiInBMP(int value) => value switch
+{
+    0x231A or 0x231B => true, // ⌚⌛
+    0x23E9 or 0x23EA or 0x23EB or 0x23EC or 0x23F0 or 0x23F3 => true,
+    >= 0x25AA and <= 0x25AB => true,
+    0x25B6 or 0x25C0 => true,
+    >= 0x25FB and <= 0x25FE => true,
+    >= 0x2600 and <= 0x2604 => true,
+    0x260E or 0x2611 => true,
+    >= 0x2614 and <= 0x2615 => true,
+    0x2618 or 0x261D or 0x2620 => true,
+    >= 0x2622 and <= 0x2623 => true,
+    0x2626 or 0x262A or 0x262E or 0x262F => true,
+    >= 0x2638 and <= 0x263A => true,
+    0x2640 or 0x2642 => true,
+    >= 0x2648 and <= 0x2653 => true, // zodiac
+    0x265F or 0x2660 or 0x2663 or 0x2665 or 0x2666 => true,
+    0x2668 or 0x267B or 0x267E or 0x267F => true,
+    >= 0x2692 and <= 0x2697 => true,
+    0x2699 or 0x269B or 0x269C => true,
+    >= 0x26A0 and <= 0x26A1 => true,
+    >= 0x26AA and <= 0x26AB => true,
+    >= 0x26B0 and <= 0x26B1 => true,
+    >= 0x26BD and <= 0x26BE => true,
+    >= 0x26C4 and <= 0x26C5 => true,
+    0x26C8 or 0x26CE or 0x26CF => true,
+    0x26D1 or 0x26D3 or 0x26D4 => true,
+    0x26E9 or 0x26EA => true,
+    >= 0x26F0 and <= 0x26F5 => true,
+    >= 0x26F7 and <= 0x26FA => true,
+    0x26FD => true,
+    0x2702 or 0x2705 => true,
+    >= 0x2708 and <= 0x270D => true,
+    0x270F => true,
+    0x2712 or 0x2714 or 0x2716 => true,
+    0x271D or 0x2721 => true,
+    0x2728 => true,
+    0x2733 or 0x2734 => true,
+    0x2744 or 0x2747 => true,
+    0x274C or 0x274E => true,
+    >= 0x2753 and <= 0x2755 => true,
+    0x2757 => true,
+    >= 0x2763 and <= 0x2764 => true,
+    >= 0x2795 and <= 0x2797 => true,
+    0x27A1 or 0x27B0 or 0x27BF => true,
+    >= 0x2934 and <= 0x2935 => true,
+    >= 0x2B05 and <= 0x2B07 => true,
+    0x2B1B or 0x2B1C or 0x2B50 or 0x2B55 => true,
+    _ => false
+};
 
 int RuneWidth(Rune rune)
 {
@@ -350,12 +401,14 @@ int RuneWidth(Rune rune)
     // Wide: CJK, fullwidth, emoji
     if (v >= 0x1100 && (
         (v <= 0x115F) ||                          // Hangul Jamo
-        (v >= 0x2600 && v <= 0x27BF) ||            // Misc Symbols + Dingbats (emoji: ✅❌⚠️)
         (v >= 0x2E80 && v <= 0x9FFF) ||            // CJK
         (v >= 0xF900 && v <= 0xFAFF) ||            // CJK Compatibility
         (v >= 0xFE30 && v <= 0xFE6F) ||            // CJK Compatibility Forms
         (v >= 0xFF01 && v <= 0xFF60) ||             // Fullwidth forms
         (v >= 0x1F000)))                            // Supplementary emoji (🔧💭 etc.)
+        return 2;
+    // BMP emoji with default emoji presentation
+    if (IsWideEmojiInBMP(v))
         return 2;
     return 1;
 }
@@ -1450,6 +1503,34 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
     string StripAnsi(string s) => GetVisibleText(s);
     string HighlightLine(string s) => noColor ? s : $"[on cyan black]{Markup.Escape(GetVisibleText(s))}[/]";
 
+    string? GetScrollAnchor(List<string> lines, int offset)
+    {
+        if (offset >= lines.Count) return null;
+        for (int i = 0; i < 5 && offset + i < lines.Count; i++)
+        {
+            var text = StripAnsi(lines[offset + i]);
+            if (!string.IsNullOrWhiteSpace(text) &&
+                !text.TrimStart().StartsWith("───") &&
+                text.Trim() != "┃" &&
+                text.Length > 5)
+                return text;
+        }
+        return StripAnsi(lines[offset]);
+    }
+
+    int FindAnchoredOffset(List<string> lines, string? anchorText, int fallbackOffset, int oldCount)
+    {
+        if (anchorText == null) return fallbackOffset;
+        for (int si = 0; si < lines.Count; si++)
+        {
+            if (StripAnsi(lines[si]) == anchorText)
+                return si;
+        }
+        if (oldCount > 0)
+            return Math.Min((int)((long)fallbackOffset * lines.Count / oldCount), Math.Max(0, lines.Count - 1));
+        return fallbackOffset;
+    }
+
     void RebuildContent()
     {
         var filter = filterIndex == 0 ? null : filterCycle[filterIndex];
@@ -1493,7 +1574,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
         
         // Apply horizontal scroll offset
         var scrolledMarkup = hOffset > 0 ? SkipMarkupWidth(markupText, hOffset) : markupText;
-        scrolledMarkup = scrolledMarkup.Replace("\r", "");
+
         var visible = StripAnsi(scrolledMarkup);
         int visWidth = VisibleWidth(visible);
         
@@ -1901,43 +1982,20 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
                             Render();
                             break;
                         case 't':
-                            // Anchor scroll to content identity before rebuild
-                            string? anchorText = null;
-                            if (scrollOffset < contentLines.Count)
-                                anchorText = StripAnsi(contentLines[scrollOffset]);
+                            var tAnchor = GetScrollAnchor(contentLines, scrollOffset);
+                            int tOldCount = contentLines.Count;
                             currentExpandTools = !currentExpandTools;
                             RebuildContent();
-                            if (anchorText != null)
-                            {
-                                for (int si = 0; si < contentLines.Count; si++)
-                                {
-                                    if (StripAnsi(contentLines[si]) == anchorText)
-                                    {
-                                        scrollOffset = si;
-                                        break;
-                                    }
-                                }
-                            }
+                            scrollOffset = FindAnchoredOffset(contentLines, tAnchor, scrollOffset, tOldCount);
                             ClampScroll();
                             Render();
                             break;
                         case 'f':
-                            string? fAnchor = null;
-                            if (scrollOffset < contentLines.Count)
-                                fAnchor = StripAnsi(contentLines[scrollOffset]);
+                            var fAnchor = GetScrollAnchor(contentLines, scrollOffset);
+                            int fOldCount = contentLines.Count;
                             filterIndex = (filterIndex + 1) % filterCycle.Length;
                             RebuildContent();
-                            if (fAnchor != null)
-                            {
-                                for (int si = 0; si < contentLines.Count; si++)
-                                {
-                                    if (StripAnsi(contentLines[si]) == fAnchor)
-                                    {
-                                        scrollOffset = si;
-                                        break;
-                                    }
-                                }
-                            }
+                            scrollOffset = FindAnchoredOffset(contentLines, fAnchor, scrollOffset, fOldCount);
                             ClampScroll();
                             Render();
                             break;
