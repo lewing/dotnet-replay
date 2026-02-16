@@ -71,8 +71,11 @@ replay <file> | less        # Auto-switches to stream mode when piped
 |--------|--------|
 | **↑** or **k** | Scroll up one line |
 | **↓** or **j** | Scroll down one line |
-| **←**, **h**, **PgUp** | Page up |
-| **→**, **l**, **PgDn** | Page down |
+| **←** or **h** | Scroll left (pan horizontally) |
+| **→** or **l** | Scroll right (pan horizontally) |
+| **PgUp** | Page up |
+| **PgDn** | Page down |
+| **0** | Reset horizontal scroll |
 | **Space** | Page down |
 | **g** or **Home** | Jump to start of transcript |
 | **G** or **End** | Jump to end of transcript |

@@ -221,6 +221,73 @@ string TruncateMarkupToWidth(string markupText, int maxWidth)
     return result.ToString();
 }
 
+string SkipMarkupWidth(string markupText, int skipColumns)
+{
+    if (skipColumns <= 0) return markupText;
+    var openTags = new List<string>();
+    int visWidth = 0;
+    int i = 0;
+    while (i < markupText.Length && visWidth < skipColumns)
+    {
+        // Escaped brackets [[ or ]]
+        if (i + 1 < markupText.Length && markupText[i] == '[' && markupText[i + 1] == '[')
+        {
+            visWidth++;
+            i += 2;
+            continue;
+        }
+        if (i + 1 < markupText.Length && markupText[i] == ']' && markupText[i + 1] == ']')
+        {
+            visWidth++;
+            i += 2;
+            continue;
+        }
+        // Markup tags
+        if (markupText[i] == '[')
+        {
+            int closeIdx = markupText.IndexOf(']', i + 1);
+            if (closeIdx > i)
+            {
+                var tag = markupText[(i + 1)..closeIdx];
+                if (tag == "/" || tag.StartsWith("/"))
+                {
+                    if (openTags.Count > 0) openTags.RemoveAt(openTags.Count - 1);
+                }
+                else
+                {
+                    openTags.Add(tag);
+                }
+                i = closeIdx + 1;
+                continue;
+            }
+        }
+        // Regular character
+        try
+        {
+            var rune = Rune.GetRuneAt(markupText, i);
+            int charWidth = (rune.Value >= 0x1100 && (
+                (rune.Value <= 0x115F) ||
+                (rune.Value >= 0x2E80 && rune.Value <= 0x9FFF) ||
+                (rune.Value >= 0xF900 && rune.Value <= 0xFAFF) ||
+                (rune.Value >= 0xFE30 && rune.Value <= 0xFE6F) ||
+                (rune.Value >= 0xFF01 && rune.Value <= 0xFF60) ||
+                (rune.Value >= 0x1F000))) ? 2 : 1;
+            visWidth += charWidth;
+            i += rune.Utf16SequenceLength;
+        }
+        catch
+        {
+            visWidth++;
+            i++;
+        }
+    }
+    // Re-open any tags that were active at the skip point
+    var prefix = new StringBuilder();
+    foreach (var tag in openTags)
+        prefix.Append($"[{tag}]");
+    return prefix.ToString() + markupText[i..];
+}
+
 string PadVisible(string s, int totalWidth)
 {
     var visible = GetVisibleText(s);
@@ -862,6 +929,7 @@ List<string> RenderWazaContentLines(WazaData d, string? filter, bool expandTool)
 void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines, T parsedData, bool isJsonlFormat, bool noFollow)
 {
     int scrollOffset = 0;
+    int scrollX = 0;
     string? currentFilter = filterType;
     bool currentExpandTools = expandTools;
     string? searchPattern = null;
@@ -937,11 +1005,15 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
         return Math.Max(1, h - 2);
     }
 
-    void WriteMarkupLine(int row, string markupText, int width)
+    void WriteMarkupLine(int row, string markupText, int width, int hOffset = 0)
     {
         AnsiConsole.Cursor.SetPosition(0, row + 1); // Spectre uses 1-based positions
-        var visible = StripAnsi(markupText);
+        
+        // Apply horizontal scroll offset
+        var scrolledMarkup = hOffset > 0 ? SkipMarkupWidth(markupText, hOffset) : markupText;
+        var visible = StripAnsi(scrolledMarkup);
         int visWidth = VisibleWidth(visible);
+        
         if (visWidth >= width)
         {
             if (noColor)
@@ -951,7 +1023,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
             }
             else
             {
-                var truncatedMarkup = TruncateMarkupToWidth(markupText, width - 1);
+                var truncatedMarkup = TruncateMarkupToWidth(scrolledMarkup, width - 1);
                 try { AnsiConsole.Markup(truncatedMarkup); }
                 catch
                 {
@@ -967,7 +1039,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
                 Console.Write(visible + new string(' ', padding));
             else
             {
-                try { AnsiConsole.Markup(markupText + new string(' ', padding)); }
+                try { AnsiConsole.Markup(scrolledMarkup + new string(' ', padding)); }
                 catch { Console.Write(visible + new string(' ', padding)); }
             }
         }
@@ -1038,7 +1110,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
             {
                 var line = contentLines[i];
                 bool isMatch = searchPattern is not null && searchMatches.Contains(i);
-                WriteMarkupLine(row, isMatch ? HighlightLine(line) : line, w);
+                WriteMarkupLine(row, isMatch ? HighlightLine(line) : line, w, scrollX);
                 row++;
             }
 
@@ -1071,7 +1143,8 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
         else
         {
             var followIndicator = following ? (userAtBottom ? " LIVE" : " [new content ↓]") : "";
-            statusText = $" Line {currentLine}/{contentLines.Count} | Filter: {statusFilter}{followIndicator} | \u2191\u2193 j/k scroll | Space page | / search | q quit";
+            var colIndicator = scrollX > 0 ? $" Col {scrollX}+" : "";
+            statusText = $" Line {currentLine}/{contentLines.Count}{colIndicator} | Filter: {statusFilter}{followIndicator} | ←→ h/l pan | / search | q quit";
         }
         var escapedStatus = Markup.Escape(statusText);
         int statusVisLen = VisibleWidth(statusText);
@@ -1272,6 +1345,10 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
                     break;
 
                 case ConsoleKey.LeftArrow:
+                    scrollX = Math.Max(0, scrollX - 8);
+                    Render();
+                    break;
+
                 case ConsoleKey.PageUp:
                     scrollOffset = Math.Max(0, scrollOffset - ViewportHeight());
                     userAtBottom = scrollOffset >= Math.Max(0, contentLines.Count - ViewportHeight());
@@ -1279,6 +1356,10 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
                     break;
 
                 case ConsoleKey.RightArrow:
+                    scrollX += 8;
+                    Render();
+                    break;
+
                 case ConsoleKey.PageDown:
                 case ConsoleKey.Spacebar:
                     scrollOffset += ViewportHeight();
@@ -1289,6 +1370,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
 
                 case ConsoleKey.Home:
                     scrollOffset = 0;
+                    scrollX = 0;
                     userAtBottom = contentLines.Count <= ViewportHeight();
                     Render();
                     break;
@@ -1314,14 +1396,15 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
                             Render();
                             break;
                         case 'h':
-                            scrollOffset = Math.Max(0, scrollOffset - ViewportHeight());
-                            userAtBottom = scrollOffset >= Math.Max(0, contentLines.Count - ViewportHeight());
+                            scrollX = Math.Max(0, scrollX - 8);
                             Render();
                             break;
                         case 'l':
-                            scrollOffset += ViewportHeight();
-                            ClampScroll();
-                            userAtBottom = scrollOffset >= Math.Max(0, contentLines.Count - ViewportHeight());
+                            scrollX += 8;
+                            Render();
+                            break;
+                        case '0':
+                            scrollX = 0;
                             Render();
                             break;
                         case 'g':
