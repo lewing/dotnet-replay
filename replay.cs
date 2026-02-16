@@ -402,6 +402,10 @@ bool isJsonl = filePath.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase)
     || (!filePath.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
         && firstLine.TrimStart().StartsWith("{") && !firstLine.TrimStart().StartsWith("["));
 
+bool isClaude = false;
+if (isJsonl && IsClaudeFormat(filePath))
+    isClaude = true;
+
 bool isWaza = false;
 JsonDocument? wazaDoc = null;
 
@@ -434,7 +438,8 @@ if (!isJsonl)
 if (streamMode)
 {
     // Stream mode: original dump-everything behavior
-    if (isJsonl) StreamEventsJsonl(filePath);
+    if (isJsonl && !isClaude) StreamEventsJsonl(filePath);
+    else if (isJsonl && isClaude) { var p = ParseClaudeData(filePath); if (p != null) { var cl = RenderJsonlContentLines(p, filterType, expandTools); foreach (var l in cl) Console.WriteLine(l); } }
     else if (isWaza) StreamWazaTranscript(wazaDoc!);
 }
 else
@@ -445,11 +450,11 @@ else
     // We need the parsed data for re-rendering with different tool/filter settings
     if (isJsonl)
     {
-        var parsed = ParseJsonlData(filePath);
+        var parsed = isClaude ? ParseClaudeData(filePath) : ParseJsonlData(filePath);
         if (parsed is null) return;
         headerLines = RenderJsonlHeaderLines(parsed);
         contentLines = RenderJsonlContentLines(parsed, filterType, expandTools);
-        RunInteractivePager(headerLines, contentLines, parsed, isJsonlFormat: true, noFollow: noFollow);
+        RunInteractivePager(headerLines, contentLines, parsed, isJsonlFormat: !isClaude, noFollow: isClaude || noFollow);
     }
     else if (isWaza)
     {
@@ -515,6 +520,152 @@ JsonlData? ParseJsonlData(string path)
         turns = turns.Skip(turns.Count - tail.Value).ToList();
 
     return new JsonlData(events, turns, sessionId, branch, copilotVersion, cwd, startTime, endTime, events.Count);
+}
+
+// ========== Claude Code Parser ==========
+bool IsClaudeFormat(string path)
+{
+    try
+    {
+        foreach (var line in File.ReadLines(path).Take(10))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            var evType = SafeGetString(root, "type");
+            if (evType is "user" or "assistant")
+            {
+                if (root.TryGetProperty("message", out var msg) && msg.TryGetProperty("role", out _))
+                    return true;
+            }
+        }
+    }
+    catch { }
+    return false;
+}
+
+JsonlData? ParseClaudeData(string path)
+{
+    var events = new List<JsonDocument>();
+    foreach (var line in File.ReadLines(path))
+    {
+        if (string.IsNullOrWhiteSpace(line)) continue;
+        try { events.Add(JsonDocument.Parse(line)); }
+        catch { }
+    }
+    if (events.Count == 0) return null;
+
+    string sessionId = "", branch = "", cwd = "", version = "";
+    DateTimeOffset? startTime = null, endTime = null;
+
+    var turns = new List<(string type, JsonElement root, DateTimeOffset? ts)>();
+
+    foreach (var ev in events)
+    {
+        var root = ev.RootElement;
+        var evType = SafeGetString(root, "type");
+
+        // Extract metadata from any event
+        if (sessionId == "") sessionId = SafeGetString(root, "sessionId");
+        if (branch == "") branch = SafeGetString(root, "gitBranch");
+        if (cwd == "") cwd = SafeGetString(root, "cwd");
+        if (version == "") version = SafeGetString(root, "version");
+
+        // Parse timestamp (Claude uses unix milliseconds)
+        DateTimeOffset? ts = null;
+        if (root.TryGetProperty("timestamp", out var tsEl))
+        {
+            if (tsEl.ValueKind == JsonValueKind.Number && tsEl.TryGetInt64(out var msTs))
+                ts = DateTimeOffset.FromUnixTimeMilliseconds(msTs);
+            else if (tsEl.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(tsEl.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var dto))
+                ts = dto;
+        }
+        startTime ??= ts;
+        if (ts.HasValue) endTime = ts;
+
+        if (evType == "user" && root.TryGetProperty("message", out var userMsg))
+        {
+            // Check if this is a tool result
+            bool isToolResult = false;
+            if (root.TryGetProperty("toolUseResult", out _) && userMsg.TryGetProperty("content", out var uc) && uc.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var block in uc.EnumerateArray())
+                {
+                    if (SafeGetString(block, "type") == "tool_result")
+                    {
+                        var content = "";
+                        if (block.TryGetProperty("content", out var tc))
+                        {
+                            if (tc.ValueKind == JsonValueKind.String)
+                                content = tc.GetString() ?? "";
+                            else
+                                content = tc.GetRawText();
+                        }
+                        var syntheticJson = $"{{\"type\":\"tool.result\",\"data\":{{\"tool_result\":{JsonSerializer.Serialize(content)},\"name\":\"\"}}}}";
+                        var synDoc = JsonDocument.Parse(syntheticJson);
+                        turns.Add(("tool.result", synDoc.RootElement, ts));
+                        isToolResult = true;
+                    }
+                }
+            }
+            if (!isToolResult)
+            {
+                // Regular user message
+                var content = "";
+                if (userMsg.TryGetProperty("content", out var mc))
+                {
+                    if (mc.ValueKind == JsonValueKind.String)
+                        content = mc.GetString() ?? "";
+                    else if (mc.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var block in mc.EnumerateArray())
+                        {
+                            if (SafeGetString(block, "type") == "text")
+                                content += block.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
+                        }
+                    }
+                }
+                var syntheticJson = $"{{\"type\":\"user.message\",\"data\":{{\"content\":{JsonSerializer.Serialize(content)}}}}}";
+                var synDoc = JsonDocument.Parse(syntheticJson);
+                turns.Add(("user.message", synDoc.RootElement, ts));
+            }
+        }
+        else if (evType == "assistant" && root.TryGetProperty("message", out var asstMsg))
+        {
+            if (asstMsg.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var block in content.EnumerateArray())
+                {
+                    var blockType = SafeGetString(block, "type");
+                    if (blockType == "text")
+                    {
+                        var text = block.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
+                        if (!string.IsNullOrWhiteSpace(text))
+                        {
+                            var syntheticJson = $"{{\"type\":\"assistant.message\",\"data\":{{\"content\":{JsonSerializer.Serialize(text)}}}}}";
+                            var synDoc = JsonDocument.Parse(syntheticJson);
+                            turns.Add(("assistant.message", synDoc.RootElement, ts));
+                        }
+                    }
+                    else if (blockType == "tool_use")
+                    {
+                        var toolName = SafeGetString(block, "name");
+                        var input = block.TryGetProperty("input", out var inp) ? inp.GetRawText() : "{}";
+                        var syntheticJson = $"{{\"type\":\"tool.execution_start\",\"data\":{{\"name\":{JsonSerializer.Serialize(toolName)},\"arguments\":{input}}}}}";
+                        var synDoc = JsonDocument.Parse(syntheticJson);
+                        turns.Add(("tool.execution_start", synDoc.RootElement, ts));
+                    }
+                    // Skip "thinking" blocks
+                }
+            }
+        }
+        // Skip progress, system, file-history-snapshot
+    }
+
+    if (tail.HasValue && tail.Value < turns.Count)
+        turns = turns.Skip(turns.Count - tail.Value).ToList();
+
+    return new JsonlData(events, turns, sessionId, branch, version, cwd, startTime, endTime, events.Count);
 }
 
 // ========== Waza Parser ==========
@@ -665,7 +816,7 @@ string BuildWazaInfoBar(WazaData d)
 List<string> RenderJsonlHeaderLines(JsonlData d)
 {
     var lines = new List<string>();
-    int boxWidth = Math.Max(40, AnsiConsole.Profile.Width - 2);
+    int boxWidth = Math.Max(40, AnsiConsole.Profile.Width);
     int inner = boxWidth - 2;
     string top = Bold(Cyan("╭" + new string('─', inner) + "╮"));
     string mid = Bold(Cyan("├" + new string('─', inner) + "┤"));
@@ -692,7 +843,7 @@ List<string> RenderWazaHeaderLines(WazaData d)
 {
     var lines = new List<string>();
     double avgScore = d.Validations.Count > 0 ? d.Validations.Average(v => v.score) : 0;
-    int boxWidth = Math.Max(40, AnsiConsole.Profile.Width - 2);
+    int boxWidth = Math.Max(40, AnsiConsole.Profile.Width);
     int inner = boxWidth - 2;
     string top = Bold(Cyan("╭" + new string('─', inner) + "╮"));
     string mid = Bold(Cyan("├" + new string('─', inner) + "┤"));
@@ -1605,6 +1756,49 @@ string? BrowseSessions(string sessionStateDir)
                 allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
             }
         }
+        // Also scan Claude Code sessions
+        var claudeProjectsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "projects");
+        if (Directory.Exists(claudeProjectsDir))
+        {
+            foreach (var projDir in Directory.GetDirectories(claudeProjectsDir))
+            {
+                foreach (var jsonlFile in Directory.GetFiles(projDir, "*.jsonl"))
+                {
+                    var fileName = Path.GetFileNameWithoutExtension(jsonlFile);
+                    if (!Guid.TryParse(fileName, out _)) continue;
+
+                    try
+                    {
+                        string claudeId = fileName, claudeSummary = "", claudeCwd = "";
+                        DateTime claudeUpdatedAt = File.GetLastWriteTimeUtc(jsonlFile);
+                        foreach (var line in File.ReadLines(jsonlFile).Take(5))
+                        {
+                            if (string.IsNullOrWhiteSpace(line)) continue;
+                            var doc = JsonDocument.Parse(line);
+                            var root = doc.RootElement;
+                            if (claudeCwd == "") claudeCwd = SafeGetString(root, "cwd");
+                            if (root.TryGetProperty("message", out var msg) && msg.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String)
+                            {
+                                var text = c.GetString() ?? "";
+                                if (text.Length > 0 && claudeSummary == "")
+                                    claudeSummary = "[Claude] " + (text.Length > 80 ? text[..77] + "..." : text);
+                            }
+                            if (root.TryGetProperty("timestamp", out var ts) && ts.ValueKind == JsonValueKind.Number && ts.TryGetInt64(out var msTs))
+                                claudeUpdatedAt = DateTimeOffset.FromUnixTimeMilliseconds(msTs).UtcDateTime;
+                        }
+                        if (claudeSummary == "") claudeSummary = "[Claude] " + Path.GetFileName(projDir).Replace("-", "\\");
+
+                        long fileSize = new FileInfo(jsonlFile).Length;
+                        lock (sessionsLock)
+                        {
+                            allSessions.Add((claudeId, claudeSummary, claudeCwd, claudeUpdatedAt, jsonlFile, fileSize));
+                            allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+                        }
+                    }
+                    catch { continue; }
+                }
+            }
+        }
         scanComplete = true;
     });
     scanThread.IsBackground = true;
@@ -1673,7 +1867,7 @@ string? BrowseSessions(string sessionStateDir)
         previewScroll = 0;
         try
         {
-            var data = ParseJsonlData(eventsPath);
+            var data = IsClaudeFormat(eventsPath) ? ParseClaudeData(eventsPath) : ParseJsonlData(eventsPath);
             if (data == null) { previewLines = new List<string> { "", "  (unable to load preview)" }; return; }
             if (data.Turns.Count > 50)
                 data = data with { Turns = data.Turns.Skip(data.Turns.Count - 50).ToList() };
