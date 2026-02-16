@@ -131,7 +131,7 @@ List<string> RenderMarkdownLines(string markdown, string colorName, string prefi
         return SplitLines(markdown).Select(l => $"{prefix}{l}").ToList();
 
     var doc = Markdown.Parse(markdown, markdownPipeline);
-    var result = new List<string>();
+    List<string> result = [];
 
     foreach (var block in doc)
     {
@@ -139,7 +139,7 @@ List<string> RenderMarkdownLines(string markdown, string colorName, string prefi
     }
 
     // Filter consecutive blank separator lines (keep at most one between content)
-    var filtered = new List<string>();
+    List<string> filtered = [];
     bool lastWasBlank = false;
     var blankPattern = noColor ? prefix.TrimEnd() : $"[{colorName}]{prefix.TrimEnd()}[/]";
     
@@ -515,7 +515,7 @@ string TruncateMarkupToWidth(string markupText, int maxWidth)
 string SkipMarkupWidth(string markupText, int skipColumns)
 {
     if (skipColumns <= 0) return markupText;
-    var openTags = new List<string>();
+    List<string> openTags = [];
     int visWidth = 0;
     int i = 0;
     while (i < markupText.Length && visWidth < skipColumns)
@@ -596,7 +596,7 @@ string Truncate(string s, int max)
 
 List<string> FormatJsonProperties(JsonElement obj, string linePrefix, int maxValueLen)
 {
-    var lines = new List<string>();
+    List<string> lines = [];
     if (obj.ValueKind == JsonValueKind.Object)
     {
         foreach (var prop in obj.EnumerateObject())
@@ -726,7 +726,7 @@ else
 // ========== JSONL Parser ==========
 JsonlData? ParseJsonlData(string path)
 {
-    var events = new List<JsonDocument>();
+    List<JsonDocument> events = [];
     foreach (var line in File.ReadLines(path))
     {
         if (string.IsNullOrWhiteSpace(line)) continue;
@@ -761,7 +761,7 @@ JsonlData? ParseJsonlData(string path)
         }
     }
 
-    var turns = new List<(string type, JsonElement root, DateTimeOffset? ts)>();
+    List<(string type, JsonElement root, DateTimeOffset? ts)> turns = [];
     foreach (var ev in events)
     {
         var root = ev.RootElement;
@@ -804,7 +804,7 @@ bool IsClaudeFormat(string path)
 
 JsonlData? ParseClaudeData(string path)
 {
-    var events = new List<JsonDocument>();
+    List<JsonDocument> events = [];
     foreach (var line in File.ReadLines(path))
     {
         if (string.IsNullOrWhiteSpace(line)) continue;
@@ -816,7 +816,7 @@ JsonlData? ParseClaudeData(string path)
     string sessionId = "", branch = "", cwd = "", version = "";
     DateTimeOffset? startTime = null, endTime = null;
 
-    var turns = new List<(string type, JsonElement root, DateTimeOffset? ts)>();
+    List<(string type, JsonElement root, DateTimeOffset? ts)> turns = [];
 
     foreach (var ev in events)
     {
@@ -859,7 +859,7 @@ JsonlData? ParseClaudeData(string path)
                             else if (tc.ValueKind == JsonValueKind.Array)
                             {
                                 // tool_result content can be an array of {type:"text",text:"..."}
-                                var parts = new List<string>();
+                                List<string> parts = [];
                                 foreach (var part in tc.EnumerateArray())
                                     if (SafeGetString(part, "type") == "text")
                                         parts.Add(part.TryGetProperty("text", out var pt) ? pt.GetString() ?? "" : "");
@@ -982,7 +982,7 @@ WazaData ParseWazaData(JsonDocument doc)
     string taskName = "", taskId = "", status = "", prompt = "", finalOutput = "";
     double durationMs = 0;
     int totalTurns = 0, toolCallCount = 0, tokensIn = 0, tokensOut = 0;
-    var validations = new List<(string name, double score, bool passed, string feedback)>();
+    List<(string name, double score, bool passed, string feedback)> validations = [];
 
     if (root.ValueKind == JsonValueKind.Array)
     {
@@ -1092,7 +1092,7 @@ WazaData ParseWazaData(JsonDocument doc)
 // ========== Info bar builders (compact 1-line header) ==========
 string BuildJsonlInfoBar(JsonlData d)
 {
-    var parts = new List<string>();
+    List<string> parts = [];
     if (d.SessionId != "") parts.Add($"session {d.SessionId[..Math.Min(d.SessionId.Length, 8)]}");
     if (d.CopilotVersion != "") parts.Add(d.CopilotVersion);
     parts.Add($"{d.EventCount} events");
@@ -1101,7 +1101,7 @@ string BuildJsonlInfoBar(JsonlData d)
 
 string BuildWazaInfoBar(WazaData d)
 {
-    var parts = new List<string>();
+    List<string> parts = [];
     if (d.TaskId != "") parts.Add(d.TaskId);
     else if (d.TaskName != "") parts.Add(d.TaskName);
     if (d.ModelId != "") parts.Add(d.ModelId);
@@ -1121,7 +1121,7 @@ string BuildWazaInfoBar(WazaData d)
 // ========== Full header builders (for 'i' overlay) ==========
 List<string> RenderJsonlHeaderLines(JsonlData d)
 {
-    var lines = new List<string>();
+    List<string> lines = [];
     int boxWidth = Math.Max(40, AnsiConsole.Profile.Width);
     int inner = boxWidth - 2;
     string top = Bold(Cyan("╭" + new string('─', inner) + "╮"));
@@ -1147,7 +1147,7 @@ List<string> RenderJsonlHeaderLines(JsonlData d)
 
 List<string> RenderWazaHeaderLines(WazaData d)
 {
-    var lines = new List<string>();
+    List<string> lines = [];
     double avgScore = d.Validations.Count > 0 ? d.Validations.Average(v => v.score) : 0;
     int boxWidth = Math.Max(40, AnsiConsole.Profile.Width);
     int inner = boxWidth - 2;
@@ -1205,7 +1205,7 @@ List<string> RenderWazaHeaderLines(WazaData d)
 // ========== Content line builders ==========
 List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandTool)
 {
-    var lines = new List<string>();
+    List<string> lines = [];
     var filtered = d.Turns.AsEnumerable();
 
     if (filter is not null)
@@ -1360,7 +1360,7 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
 
 List<string> RenderWazaContentLines(WazaData d, string? filter, bool expandTool)
 {
-    var lines = new List<string>();
+    List<string> lines = [];
     if (d.TranscriptItems.Length == 0) { lines.Add(Dim("  No events found")); return lines; }
 
     int turnIndex = 0;
@@ -1765,7 +1765,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
                         var fi = new FileInfo(filePath);
                         if (fi.Length > lastFileOffset && parsedData is JsonlData jdFollow)
                         {
-                            var newLines = new List<string>();
+                            List<string> newLines = [];
                             using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
                             {
                                 fs.Seek(lastFileOffset, SeekOrigin.Begin);
@@ -2105,8 +2105,8 @@ string? BrowseSessions(string sessionStateDir)
         return null;
     }
 
-    var allSessions = new List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPath, long fileSize)>();
-    var sessionsLock = new object();
+    List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPath, long fileSize)> allSessions = [];
+    var sessionsLock = new System.Threading.Lock();
     bool scanComplete = false;
     int lastRenderedCount = -1;
 
@@ -2262,7 +2262,7 @@ string? BrowseSessions(string sessionStateDir)
         try
         {
             var data = IsClaudeFormat(eventsPath) ? ParseClaudeData(eventsPath) : ParseJsonlData(eventsPath);
-            if (data == null) { previewLines = new List<string> { "", "  (unable to load preview)" }; return; }
+            if (data == null) { previewLines = ["", "  (unable to load preview)"]; return; }
             if (data.Turns.Count > 50)
                 data = data with { Turns = data.Turns.Skip(data.Turns.Count - 50).ToList() };
             previewLines = RenderJsonlContentLines(data, null, false);
@@ -2270,7 +2270,7 @@ string? BrowseSessions(string sessionStateDir)
         }
         catch
         {
-            previewLines = new List<string> { "", "  (unable to load preview)" };
+            previewLines = ["", "  (unable to load preview)"];
             previewScroll = 0;
         }
     }
@@ -2624,40 +2624,41 @@ string FormatFileSize(long bytes)
 
 void PrintHelp()
 {
-    Console.WriteLine(@"
-Usage: replay [file|session-id] [options]
+    Console.WriteLine("""
 
-  <file>              Path to .jsonl or .json transcript file
-  <session-id>        GUID of a Copilot CLI session to open
-  (no args)           Browse recent Copilot CLI sessions
+    Usage: replay [file|session-id] [options]
 
-Options:
-  --tail <N>          Show only the last N conversation turns
-  --expand-tools      Show tool arguments, results, and thinking/reasoning
-  --full              Don't truncate tool output (use with --expand-tools)
-  --filter <type>     Filter by event type: user, assistant, tool, error
-  --no-color          Disable ANSI colors
-  --stream            Use streaming output (non-interactive, original behavior)
-  --no-follow         Disable auto-follow for JSONL files
-  --help              Show this help
+      <file>              Path to .jsonl or .json transcript file
+      <session-id>        GUID of a Copilot CLI session to open
+      (no args)           Browse recent Copilot CLI sessions
 
-Interactive mode (default):
-  ↑/k ↓/j             Scroll up/down one line
-  ←/h  →/l             Scroll left/right (pan)
-  PgUp PgDn             Page up/down
-  0                     Reset horizontal scroll
-  Space                Page down
-  g/Home  G/End        Jump to start/end
-  t                    Toggle tool expansion
-  f                    Cycle filter: all → user → assistant → tool → error
-  i                    Toggle full session info overlay
-  /                    Search (Enter to execute, Esc to cancel)
-  n/N                  Next/previous search match
-  q/Escape             Quit
+    Options:
+      --tail <N>          Show only the last N conversation turns
+      --expand-tools      Show tool arguments, results, and thinking/reasoning
+      --full              Don't truncate tool output (use with --expand-tools)
+      --filter <type>     Filter by event type: user, assistant, tool, error
+      --no-color          Disable ANSI colors
+      --stream            Use streaming output (non-interactive, original behavior)
+      --no-follow         Disable auto-follow for JSONL files
+      --help              Show this help
 
-JSONL files auto-follow by default (like tail -f). Use --no-follow to disable.
-When output is piped (redirected), stream mode is used automatically.
-");
+    Interactive mode (default):
+      ↑/k ↓/j             Scroll up/down one line
+      ←/h  →/l             Scroll left/right (pan)
+      PgUp PgDn             Page up/down
+      0                     Reset horizontal scroll
+      Space                Page down
+      g/Home  G/End        Jump to start/end
+      t                    Toggle tool expansion
+      f                    Cycle filter: all → user → assistant → tool → error
+      i                    Toggle full session info overlay
+      /                    Search (Enter to execute, Esc to cancel)
+      n/N                  Next/previous search match
+      q/Escape             Quit
+
+    JSONL files auto-follow by default (like tail -f). Use --no-follow to disable.
+    When output is piped (redirected), stream mode is used automatically.
+    """);
 }
 
 // ========== Parsed data structures (must follow top-level statements) ==========
