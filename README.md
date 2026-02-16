@@ -1,6 +1,6 @@
 # dotnet-replay
 
-Interactive terminal viewer for Copilot CLI sessions and [waza](https://github.com/spboyer/waza) evaluation transcripts. Built as a single-file .NET 10 app — no project file needed.
+Interactive terminal viewer for Copilot CLI sessions and [waza](https://github.com/spboyer/waza) evaluation transcripts. Built as a single-file .NET 10 app
 
 <img width="2655" height="1555" alt="image" src="https://github.com/user-attachments/assets/d1512890-e249-4a5e-ae86-f9caaf4e26e8" />
 
