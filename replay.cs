@@ -339,14 +339,24 @@ string StripMarkup(string s)
 
 string GetVisibleText(string s) => StripMarkup(s);
 
-int RuneWidth(Rune rune) =>
-    (rune.Value >= 0x1100 && (
-        (rune.Value <= 0x115F) ||
-        (rune.Value >= 0x2E80 && rune.Value <= 0x9FFF) ||
-        (rune.Value >= 0xF900 && rune.Value <= 0xFAFF) ||
-        (rune.Value >= 0xFE30 && rune.Value <= 0xFE6F) ||
-        (rune.Value >= 0xFF01 && rune.Value <= 0xFF60) ||
-        (rune.Value >= 0x1F000))) ? 2 : 1;
+int RuneWidth(Rune rune)
+{
+    int v = rune.Value;
+    // Zero-width: variation selectors and combining marks
+    if (v == 0xFE0F || v == 0xFE0E || (v >= 0x200B && v <= 0x200F) || v == 0x2060 || v == 0xFEFF)
+        return 0;
+    // Wide: CJK, fullwidth, emoji
+    if (v >= 0x1100 && (
+        (v <= 0x115F) ||                          // Hangul Jamo
+        (v >= 0x2600 && v <= 0x27BF) ||            // Misc Symbols + Dingbats (emoji: ✅❌⚠️)
+        (v >= 0x2E80 && v <= 0x9FFF) ||            // CJK
+        (v >= 0xF900 && v <= 0xFAFF) ||            // CJK Compatibility
+        (v >= 0xFE30 && v <= 0xFE6F) ||            // CJK Compatibility Forms
+        (v >= 0xFF01 && v <= 0xFF60) ||             // Fullwidth forms
+        (v >= 0x1F000)))                            // Supplementary emoji (🔧💭 etc.)
+        return 2;
+    return 1;
+}
 
 int VisibleWidth(string s)
 {
