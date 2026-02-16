@@ -682,6 +682,32 @@ JsonlData? ParseClaudeData(string path)
             }
         }
         // Skip progress, system, file-history-snapshot
+        // Handle queue-operation events (user messages typed while assistant was working)
+        else if (evType == "queue-operation")
+        {
+            var operation = SafeGetString(root, "operation");
+            if (operation == "enqueue" && root.TryGetProperty("message", out var qMsg))
+            {
+                var content = "";
+                if (qMsg.TryGetProperty("content", out var qc))
+                {
+                    if (qc.ValueKind == JsonValueKind.String)
+                        content = qc.GetString() ?? "";
+                    else if (qc.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var block in qc.EnumerateArray())
+                            if (SafeGetString(block, "type") == "text")
+                                content += block.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
+                    }
+                }
+                if (!string.IsNullOrEmpty(content))
+                {
+                    var syntheticJson = $"{{\"type\":\"user.message\",\"data\":{{\"content\":{JsonSerializer.Serialize(content)},\"queued\":true}}}}";
+                    var synDoc = JsonDocument.Parse(syntheticJson);
+                    turns.Add(("user.message", synDoc.RootElement, ts));
+                }
+            }
+        }
     }
 
     if (tail.HasValue && tail.Value < turns.Count)
@@ -952,7 +978,9 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
             {
                 lines.Add(Separator());
                 var content = SafeGetString(data, "content");
-                lines.Add(margin + Blue("┃ USER"));
+                var isQueued = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("queued", out var q) && q.ValueKind == JsonValueKind.True;
+                var userLabel = isQueued ? "┃ USER (queued)" : "┃ USER";
+                lines.Add(margin + Blue(userLabel));
                 foreach (var line in content.Split('\n'))
                     lines.Add(margin + Blue($"┃ {line}"));
                 break;
@@ -1042,8 +1070,13 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
                         resultContent = ExtractContentString(rc);
                 }
                 var isError = status == "error";
-                var colorFn = isError ? (Func<string, string>)Red : Dim;
-                var resultSummary = isError ? "┃ ❌ ERROR" : "┃ ✅ Result";
+                var isRejected = isError && !string.IsNullOrEmpty(resultContent) &&
+                    (resultContent.Contains("The user doesn't want to proceed") ||
+                     resultContent.Contains("Request interrupted by user") ||
+                     resultContent.Contains("[Request interrupted by user for tool use]"));
+                var colorFn = isRejected ? (Func<string, string>)Yellow : isError ? (Func<string, string>)Red : Dim;
+                var resultLabel = isRejected ? "┃ ⚠️ Rejected:" : isError ? "┃ ❌ ERROR:" : "┃ ✅ Result";
+                var resultSummary = resultLabel;
                 if (!expandTool && !string.IsNullOrEmpty(resultContent))
                     resultSummary += $" ({resultContent.Length:N0} chars)";
                 lines.Add(margin + colorFn(resultSummary));
@@ -1053,6 +1086,7 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
                         lines.Add(margin + colorFn($"┃   [binary content, {resultContent.Length} bytes]"));
                     else
                     {
+                        lines.Add(margin + colorFn("┃"));
                         var truncated = Truncate(resultContent, 500);
                         foreach (var line in truncated.Split('\n').Take(full ? int.MaxValue : 20))
                             lines.Add(margin + colorFn($"┃   {line}"));
