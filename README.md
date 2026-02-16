@@ -2,7 +2,8 @@
 
 Interactive terminal viewer for Copilot CLI sessions and [waza](https://github.com/spboyer/waza) evaluation transcripts. Built as a single-file .NET 10 app — no project file needed.
 
-<img width="2655" height="1555" alt="image" src="https://github.com/user-attachments/assets/1bc463dc-336c-40c4-a8df-1944b8728ceb" />
+<img width="2655" height="1555" alt="image" src="https://github.com/user-attachments/assets/d1512890-e249-4a5e-ae86-f9caaf4e26e8" />
+
 
 
 ## Install
