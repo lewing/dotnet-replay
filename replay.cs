@@ -1667,7 +1667,18 @@ string? BrowseSessions(string sessionStateDir)
         lock (sessionsLock) { count = allSessions.Count; }
         var loadingStatus = scanComplete ? "" : " Loading...";
         var filterStatus = searchFilter.Length > 0 ? $" filter: \"{searchFilter}\" ({filtered.Count} matches)" : "";
-        var headerText = $" 📋 Copilot CLI Sessions — {count} sessions{loadingStatus}{filterStatus}";
+        var cursorInfo = "";
+        if (filtered.Count > 0 && cursorIdx < filtered.Count)
+        {
+            lock (sessionsLock)
+            {
+                var cs = allSessions[filtered[cursorIdx]];
+                var shortId = cs.id.Length >= 8 ? cs.id[..8] : cs.id;
+                var updated = cs.updatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+                cursorInfo = $" | {shortId} {updated}";
+            }
+        }
+        var headerText = $" 📋 Copilot CLI Sessions — {count} sessions{loadingStatus}{filterStatus}{cursorInfo}";
         var escapedHeader = Markup.Escape(headerText);
         int headerVis = VisibleWidth(headerText);
         if (headerVis < w) escapedHeader += new string(' ', w - headerVis);
