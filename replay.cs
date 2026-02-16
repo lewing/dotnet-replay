@@ -1400,7 +1400,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
 
     // Build compact info bar
     string infoBar;
-    if (isJsonlFormat && parsedData is JsonlData jData)
+    if (parsedData is JsonlData jData)
         infoBar = BuildJsonlInfoBar(jData) + (following ? " ↓ FOLLOWING" : "");
     else if (parsedData is WazaData wData)
         infoBar = BuildWazaInfoBar(wData);
@@ -1417,7 +1417,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
     void RebuildContent()
     {
         var filter = filterIndex == 0 ? null : filterCycle[filterIndex];
-        if (isJsonlFormat && parsedData is JsonlData jd)
+        if (parsedData is JsonlData jd)
             contentLines = RenderJsonlContentLines(jd, filter, currentExpandTools);
         else if (parsedData is WazaData wd)
             contentLines = RenderWazaContentLines(wd, filter, currentExpandTools);
@@ -1706,7 +1706,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
                     lastWidth = curW;
                     lastHeight = curH;
                     // Rebuild header/content since header boxes are now width-dependent
-                    if (isJsonlFormat && parsedData is JsonlData jdResize)
+                    if (parsedData is JsonlData jdResize)
                         headerLines = RenderJsonlHeaderLines(jdResize);
                     else if (parsedData is WazaData wdResize)
                         headerLines = RenderWazaHeaderLines(wdResize);
