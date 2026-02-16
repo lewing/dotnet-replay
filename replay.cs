@@ -1,6 +1,6 @@
 #:property ToolCommandName=replay
 #:property PackageId=dotnet-replay
-#:property Version=0.3.0
+#:property Version=0.4.0
 #:property Authors=Larry Ewing
 #:property Description=Interactive transcript viewer for Copilot CLI sessions and waza evaluations
 #:property PackageLicenseExpression=MIT
@@ -8,14 +8,19 @@
 #:property PackageTags=copilot;transcript;viewer;waza;evaluation;cli
 #:property PublishAot=false
 #:package Spectre.Console@0.49.1
+#:package Markdig@0.40.0
 
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Markdig;
+using Markdig.Syntax;
+using Markdig.Syntax.Inlines;
 using Spectre.Console;
 
 Console.OutputEncoding = Encoding.UTF8;
+var markdownPipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
 
 // --- CLI argument parsing ---
 var cliArgs = Environment.GetCommandLineArgs().Skip(1).ToArray();
@@ -118,14 +123,294 @@ string Separator()
     return Dim(new string('─', Math.Max(1, width - 1)));
 }
 
-string StripMarkup(string s) => Regex.Replace(s, @"\[/?\]|\[/?(?:blue|green|yellow|red|dim|bold|cyan|invert|on cyan black)\]", "");
+// --- Markdown rendering via Markdig ---
 
-string GetVisibleText(string s)
+List<string> RenderMarkdownLines(string markdown, string colorName, string prefix = "┃ ")
 {
-    var stripped = StripMarkup(s);
-    // Collapse Spectre escaped brackets to their visible form
-    stripped = stripped.Replace("[[", "[").Replace("]]", "]");
-    return stripped;
+    if (noColor || string.IsNullOrEmpty(markdown))
+        return SplitLines(markdown).Select(l => $"{prefix}{l}").ToList();
+
+    var doc = Markdown.Parse(markdown, markdownPipeline);
+    var result = new List<string>();
+
+    foreach (var block in doc)
+    {
+        RenderBlock(block, result, colorName, prefix, 0);
+    }
+
+    // Filter consecutive blank separator lines (keep at most one between content)
+    var filtered = new List<string>();
+    bool lastWasBlank = false;
+    var blankPattern = noColor ? prefix.TrimEnd() : $"[{colorName}]{prefix.TrimEnd()}[/]";
+    
+    foreach (var line in result)
+    {
+        bool isBlank = line.Trim() == blankPattern.Trim() || GetVisibleText(line).Trim() == prefix.TrimEnd();
+        if (isBlank && lastWasBlank)
+            continue; // Skip consecutive blanks
+        filtered.Add(line);
+        lastWasBlank = isBlank;
+    }
+
+    return filtered;
+}
+
+void RenderBlock(Block block, List<string> lines, string colorName, string prefix, int depth)
+{
+    switch (block)
+    {
+        case HeadingBlock heading:
+        {
+            var text = RenderInlines(heading.Inline);
+            var marker = Markup.Escape(new string('#', heading.Level) + " ");
+            // Use compound tag to avoid nesting
+            lines.Add(noColor ? $"{prefix}{marker}{text}" : $"[{colorName} bold]{prefix}{marker}{text}[/]");
+            lines.Add(noColor ? prefix : $"[{colorName}]{prefix}[/]");
+            break;
+        }
+        case ParagraphBlock para:
+        {
+            var text = RenderInlines(para.Inline);
+            foreach (var line in SplitLines(text))
+            {
+                // Text from RenderInlines may contain inline markup - wrap at line level
+                if (noColor)
+                    lines.Add($"{prefix}{line}");
+                else
+                    lines.Add($"[{colorName}]{prefix}{line}[/]");
+            }
+            lines.Add(noColor ? prefix : $"[{colorName}]{prefix}[/]");
+            break;
+        }
+        case FencedCodeBlock fenced:
+        {
+            var lang = fenced.Info ?? "";
+            // Use compound tag for dim styling
+            lines.Add(noColor ? $"{prefix}```{Markup.Escape(lang)}" : $"[{colorName} dim]{prefix}```{Markup.Escape(lang)}[/]");
+            var codeLines = fenced.Lines;
+            for (int i = 0; i < codeLines.Count; i++)
+            {
+                var line = codeLines.Lines[i].ToString();
+                lines.Add(noColor ? $"{prefix}  {Markup.Escape(line)}" : $"[{colorName} dim]{prefix}  {Markup.Escape(line)}[/]");
+            }
+            lines.Add(noColor ? $"{prefix}```" : $"[{colorName} dim]{prefix}```[/]");
+            lines.Add(noColor ? prefix : $"[{colorName}]{prefix}[/]");
+            break;
+        }
+        case CodeBlock code:
+        {
+            var codeLines = code.Lines;
+            for (int i = 0; i < codeLines.Count; i++)
+            {
+                var line = codeLines.Lines[i].ToString();
+                lines.Add(noColor ? $"{prefix}  {Markup.Escape(line)}" : $"[{colorName} dim]{prefix}  {Markup.Escape(line)}[/]");
+            }
+            lines.Add(noColor ? prefix : $"[{colorName}]{prefix}[/]");
+            break;
+        }
+        case ListBlock list:
+        {
+            int itemNum = 0;
+            foreach (var item in list)
+            {
+                if (item is ListItemBlock listItem)
+                {
+                    itemNum++;
+                    var bullet = list.IsOrdered ? $"{itemNum}. " : "• ";
+                    var indent = new string(' ', depth * 2);
+                    bool first = true;
+                    foreach (var sub in listItem)
+                    {
+                        if (first && sub is ParagraphBlock p)
+                        {
+                            var text = RenderInlines(p.Inline);
+                            foreach (var (line, idx) in SplitLines(text).Select((l, i) => (l, i)))
+                            {
+                                if (idx == 0)
+                                {
+                                    if (noColor)
+                                        lines.Add($"{prefix}{indent}{Markup.Escape(bullet)}{line}");
+                                    else
+                                        lines.Add($"[{colorName}]{prefix}{indent}{Markup.Escape(bullet)}{line}[/]");
+                                }
+                                else
+                                {
+                                    if (noColor)
+                                        lines.Add($"{prefix}{indent}{new string(' ', bullet.Length)}{line}");
+                                    else
+                                        lines.Add($"[{colorName}]{prefix}{indent}{new string(' ', bullet.Length)}{line}[/]");
+                                }
+                            }
+                            first = false;
+                        }
+                        else
+                        {
+                            RenderBlock(sub, lines, colorName, prefix + indent + new string(' ', bullet.Length), depth + 1);
+                            first = false;
+                        }
+                    }
+                }
+            }
+            lines.Add(noColor ? prefix : $"[{colorName}]{prefix}[/]");
+            break;
+        }
+        case ThematicBreakBlock:
+        {
+            lines.Add(noColor ? $"{prefix}───" : $"[{colorName} dim]{prefix}───[/]");
+            break;
+        }
+        case QuoteBlock quote:
+        {
+            foreach (var sub in quote)
+            {
+                // Quote prefix should not contain markup - handle dim styling in the block rendering
+                var quotePrefix = prefix + "▎ ";
+                RenderBlock(sub, lines, colorName, quotePrefix, depth);
+            }
+            break;
+        }
+        default:
+        {
+            // Fallback: render raw text for unknown block types
+            var rawLines = block.ToString() is string s ? SplitLines(s) : [];
+            foreach (var line in rawLines)
+            {
+                if (noColor)
+                    lines.Add($"{prefix}{Markup.Escape(line)}");
+                else
+                    lines.Add($"[{colorName}]{prefix}{Markup.Escape(line)}[/]");
+            }
+            break;
+        }
+    }
+}
+
+string RenderInlines(ContainerInline? container)
+{
+    if (container == null) return "";
+    var sb = new StringBuilder();
+    foreach (var inline in container)
+    {
+        switch (inline)
+        {
+            case LiteralInline lit:
+                sb.Append(Markup.Escape(lit.Content.ToString()));
+                break;
+            case EmphasisInline em:
+                var inner = RenderInlines(em);
+                if (em.DelimiterCount >= 2)
+                    sb.Append(noColor ? inner : $"[bold]{inner}[/]");
+                else
+                    sb.Append(noColor ? inner : $"[italic]{inner}[/]");
+                break;
+            case CodeInline code:
+                sb.Append(noColor ? code.Content : $"[cyan]{Markup.Escape(code.Content)}[/]");
+                break;
+            case LinkInline link:
+                var linkText = RenderInlines(link);
+                var url = link.Url ?? "";
+                if (string.IsNullOrEmpty(linkText)) linkText = Markup.Escape(url);
+                sb.Append(noColor ? $"{linkText} ({url})" : $"[underline blue]{linkText}[/] [dim]({Markup.Escape(url)})[/]");
+                break;
+            case LineBreakInline:
+                sb.Append('\n');
+                break;
+            case HtmlInline html:
+                sb.Append(Markup.Escape(html.Tag));
+                break;
+            default:
+                sb.Append(Markup.Escape(inline.ToString() ?? ""));
+                break;
+        }
+    }
+    return sb.ToString();
+}
+
+string StripMarkup(string s)
+{
+    // Preserve escaped brackets
+    s = s.Replace("[[", "\x01").Replace("]]", "\x02");
+    // Strip all markup tags
+    s = Regex.Replace(s, @"\[[^\[\]]*\]", "");
+    // Restore escaped brackets to their visible form
+    s = s.Replace("\x01", "[").Replace("\x02", "]");
+    return s;
+}
+
+string GetVisibleText(string s) => StripMarkup(s);
+
+string[] SplitLines(string s) => s.Split(["\r\n", "\r", "\n"], StringSplitOptions.None);
+
+static bool IsWideEmojiInBMP(int value) => value switch
+{
+    0x231A or 0x231B => true, // ⌚⌛
+    0x23E9 or 0x23EA or 0x23EB or 0x23EC or 0x23F0 or 0x23F3 => true,
+    >= 0x25AA and <= 0x25AB => true,
+    0x25B6 or 0x25C0 => true,
+    >= 0x25FB and <= 0x25FE => true,
+    >= 0x2600 and <= 0x2604 => true,
+    0x260E or 0x2611 => true,
+    >= 0x2614 and <= 0x2615 => true,
+    0x2618 or 0x261D or 0x2620 => true,
+    >= 0x2622 and <= 0x2623 => true,
+    0x2626 or 0x262A or 0x262E or 0x262F => true,
+    >= 0x2638 and <= 0x263A => true,
+    0x2640 or 0x2642 => true,
+    >= 0x2648 and <= 0x2653 => true, // zodiac
+    0x265F or 0x2660 or 0x2663 or 0x2665 or 0x2666 => true,
+    0x2668 or 0x267B or 0x267E or 0x267F => true,
+    >= 0x2692 and <= 0x2697 => true,
+    0x2699 or 0x269B or 0x269C => true,
+    >= 0x26A0 and <= 0x26A1 => true,
+    >= 0x26AA and <= 0x26AB => true,
+    >= 0x26B0 and <= 0x26B1 => true,
+    >= 0x26BD and <= 0x26BE => true,
+    >= 0x26C4 and <= 0x26C5 => true,
+    0x26C8 or 0x26CE or 0x26CF => true,
+    0x26D1 or 0x26D3 or 0x26D4 => true,
+    0x26E9 or 0x26EA => true,
+    >= 0x26F0 and <= 0x26F5 => true,
+    >= 0x26F7 and <= 0x26FA => true,
+    0x26FD => true,
+    0x2702 or 0x2705 => true,
+    >= 0x2708 and <= 0x270D => true,
+    0x270F => true,
+    0x2712 or 0x2714 or 0x2716 => true,
+    0x271D or 0x2721 => true,
+    0x2728 => true,
+    0x2733 or 0x2734 => true,
+    0x2744 or 0x2747 => true,
+    0x274C or 0x274E => true,
+    >= 0x2753 and <= 0x2755 => true,
+    0x2757 => true,
+    >= 0x2763 and <= 0x2764 => true,
+    >= 0x2795 and <= 0x2797 => true,
+    0x27A1 or 0x27B0 or 0x27BF => true,
+    >= 0x2934 and <= 0x2935 => true,
+    >= 0x2B05 and <= 0x2B07 => true,
+    0x2B1B or 0x2B1C or 0x2B50 or 0x2B55 => true,
+    _ => false
+};
+
+int RuneWidth(Rune rune)
+{
+    int v = rune.Value;
+    // Zero-width: variation selectors and combining marks
+    if (v == 0xFE0F || v == 0xFE0E || (v >= 0x200B && v <= 0x200F) || v == 0x2060 || v == 0xFEFF)
+        return 0;
+    // Wide: CJK, fullwidth, emoji
+    if (v >= 0x1100 && (
+        (v <= 0x115F) ||                          // Hangul Jamo
+        (v >= 0x2E80 && v <= 0x9FFF) ||            // CJK
+        (v >= 0xF900 && v <= 0xFAFF) ||            // CJK Compatibility
+        (v >= 0xFE30 && v <= 0xFE6F) ||            // CJK Compatibility Forms
+        (v >= 0xFF01 && v <= 0xFF60) ||             // Fullwidth forms
+        (v >= 0x1F000)))                            // Supplementary emoji (🔧💭 etc.)
+        return 2;
+    // BMP emoji with default emoji presentation
+    if (IsWideEmojiInBMP(v))
+        return 2;
+    return 1;
 }
 
 int VisibleWidth(string s)
@@ -133,16 +418,7 @@ int VisibleWidth(string s)
     int width = 0;
     foreach (var rune in s.EnumerateRunes())
     {
-        if (rune.Value >= 0x1100 && (
-            (rune.Value <= 0x115F) ||
-            (rune.Value >= 0x2E80 && rune.Value <= 0x9FFF) ||
-            (rune.Value >= 0xF900 && rune.Value <= 0xFAFF) ||
-            (rune.Value >= 0xFE30 && rune.Value <= 0xFE6F) ||
-            (rune.Value >= 0xFF01 && rune.Value <= 0xFF60) ||
-            (rune.Value >= 0x1F000)))
-            width += 2;
-        else
-            width += 1;
+        width += RuneWidth(rune);
     }
     return width;
 }
@@ -153,13 +429,7 @@ string TruncateToWidth(string s, int maxWidth)
     int i = 0;
     foreach (var rune in s.EnumerateRunes())
     {
-        int charWidth = (rune.Value >= 0x1100 && (
-            (rune.Value <= 0x115F) ||
-            (rune.Value >= 0x2E80 && rune.Value <= 0x9FFF) ||
-            (rune.Value >= 0xF900 && rune.Value <= 0xFAFF) ||
-            (rune.Value >= 0xFE30 && rune.Value <= 0xFE6F) ||
-            (rune.Value >= 0xFF01 && rune.Value <= 0xFF60) ||
-            (rune.Value >= 0x1F000))) ? 2 : 1;
+        int charWidth = RuneWidth(rune);
         if (width + charWidth > maxWidth) break;
         width += charWidth;
         i += rune.Utf16SequenceLength;
@@ -216,13 +486,7 @@ string TruncateMarkupToWidth(string markupText, int maxWidth)
         try
         {
             var rune = Rune.GetRuneAt(markupText, i);
-            int charWidth = (rune.Value >= 0x1100 && (
-                (rune.Value <= 0x115F) ||
-                (rune.Value >= 0x2E80 && rune.Value <= 0x9FFF) ||
-                (rune.Value >= 0xF900 && rune.Value <= 0xFAFF) ||
-                (rune.Value >= 0xFE30 && rune.Value <= 0xFE6F) ||
-                (rune.Value >= 0xFF01 && rune.Value <= 0xFF60) ||
-                (rune.Value >= 0x1F000))) ? 2 : 1;
+            int charWidth = RuneWidth(rune);
             if (visWidth + charWidth > maxWidth) break;
             result.Append(markupText.AsSpan(i, rune.Utf16SequenceLength));
             visWidth += charWidth;
@@ -292,13 +556,7 @@ string SkipMarkupWidth(string markupText, int skipColumns)
         try
         {
             var rune = Rune.GetRuneAt(markupText, i);
-            int charWidth = (rune.Value >= 0x1100 && (
-                (rune.Value <= 0x115F) ||
-                (rune.Value >= 0x2E80 && rune.Value <= 0x9FFF) ||
-                (rune.Value >= 0xF900 && rune.Value <= 0xFAFF) ||
-                (rune.Value >= 0xFE30 && rune.Value <= 0xFE6F) ||
-                (rune.Value >= 0xFF01 && rune.Value <= 0xFF60) ||
-                (rune.Value >= 0x1F000))) ? 2 : 1;
+            int charWidth = RuneWidth(rune);
             visWidth += charWidth;
             i += rune.Utf16SequenceLength;
         }
@@ -347,7 +605,7 @@ List<string> FormatJsonProperties(JsonElement obj, string linePrefix, int maxVal
                 ? prop.Value.GetString() ?? ""
                 : prop.Value.GetRawText();
             var truncated = Truncate(val, maxValueLen);
-            foreach (var segment in truncated.Split('\n'))
+            foreach (var segment in SplitLines(truncated))
                 lines.Add($"{linePrefix}{prop.Name}: {segment}");
         }
     }
@@ -355,7 +613,7 @@ List<string> FormatJsonProperties(JsonElement obj, string linePrefix, int maxVal
     {
         var val = obj.GetString() ?? "";
         var truncated = Truncate(val, maxValueLen);
-        foreach (var segment in truncated.Split('\n'))
+        foreach (var segment in SplitLines(truncated))
             lines.Add($"{linePrefix}{segment}");
     }
     else
@@ -981,7 +1239,7 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
                 var isQueued = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("queued", out var q) && q.ValueKind == JsonValueKind.True;
                 var userLabel = isQueued ? "┃ USER (queued)" : "┃ USER";
                 lines.Add(margin + Blue(userLabel));
-                foreach (var line in content.Split('\n'))
+                foreach (var line in SplitLines(content))
                     lines.Add(margin + Blue($"┃ {line}"));
                 break;
             }
@@ -991,8 +1249,8 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
                 var content = SafeGetString(data, "content");
                 lines.Add(margin + Green("┃ ASSISTANT"));
                 if (!string.IsNullOrEmpty(content))
-                    foreach (var line in content.Split('\n'))
-                        lines.Add(margin + Green($"┃ {line}"));
+                    foreach (var line in RenderMarkdownLines(content, "green"))
+                        lines.Add(margin + line);
                 if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("toolRequests", out var toolReqs)
                     && toolReqs.ValueKind == JsonValueKind.Array)
                 {
@@ -1011,7 +1269,7 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
                     if (!string.IsNullOrEmpty(reasoning))
                     {
                         lines.Add(margin + Dim("┃ 💭 Thinking:"));
-                        foreach (var line in reasoning.Split('\n'))
+                        foreach (var line in SplitLines(reasoning))
                             lines.Add(margin + Dim($"┃   {line}"));
                     }
                 }
@@ -1023,7 +1281,7 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
                 var content = SafeGetString(data, "content");
                 if (string.IsNullOrEmpty(content)) break;
                 lines.Add(margin + Dim("┃ 💭 THINKING"));
-                foreach (var line in content.Split('\n'))
+                foreach (var line in SplitLines(content))
                     lines.Add(margin + Dim($"┃   {line}"));
                 break;
             }
@@ -1088,7 +1346,7 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
                     {
                         lines.Add(margin + colorFn("┃"));
                         var truncated = Truncate(resultContent, 500);
-                        foreach (var line in truncated.Split('\n').Take(full ? int.MaxValue : 20))
+                        foreach (var line in SplitLines(truncated).Take(full ? int.MaxValue : 20))
                             lines.Add(margin + colorFn($"┃   {line}"));
                     }
                 }
@@ -1147,14 +1405,14 @@ List<string> RenderWazaContentLines(WazaData d, string? filter, bool expandTool)
         if (isUserMessage)
         {
             lines.Add(margin + Blue("┃ USER"));
-            foreach (var line in content.Split('\n'))
+            foreach (var line in SplitLines(content))
                 lines.Add(margin + Blue($"┃ {line}"));
         }
         else if (isAssistantMessage)
         {
             lines.Add(margin + Green("┃ ASSISTANT"));
-            foreach (var line in content.Split('\n'))
-                lines.Add(margin + Green($"┃ {line}"));
+            foreach (var line in RenderMarkdownLines(content, "green"))
+                lines.Add(margin + line);
         }
         else if (isToolEvent)
         {
@@ -1178,7 +1436,7 @@ List<string> RenderWazaContentLines(WazaData d, string? filter, bool expandTool)
                     else
                     {
                         var truncated = Truncate(resStr, 500);
-                        var resLines = truncated.Split('\n').Take(full ? int.MaxValue : 20).ToArray();
+                        var resLines = SplitLines(truncated).Take(full ? int.MaxValue : 20).ToArray();
                         if (resLines.Length > 0)
                             lines.Add(margin + Dim($"┃   Result: {resLines[0]}"));
                         foreach (var line in resLines.Skip(1))
@@ -1231,7 +1489,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
 
     // Build compact info bar
     string infoBar;
-    if (isJsonlFormat && parsedData is JsonlData jData)
+    if (parsedData is JsonlData jData)
         infoBar = BuildJsonlInfoBar(jData) + (following ? " ↓ FOLLOWING" : "");
     else if (parsedData is WazaData wData)
         infoBar = BuildWazaInfoBar(wData);
@@ -1245,10 +1503,38 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
     string StripAnsi(string s) => GetVisibleText(s);
     string HighlightLine(string s) => noColor ? s : $"[on cyan black]{Markup.Escape(GetVisibleText(s))}[/]";
 
+    string? GetScrollAnchor(List<string> lines, int offset)
+    {
+        if (offset >= lines.Count) return null;
+        for (int i = 0; i < 5 && offset + i < lines.Count; i++)
+        {
+            var text = StripAnsi(lines[offset + i]);
+            if (!string.IsNullOrWhiteSpace(text) &&
+                !text.TrimStart().StartsWith("───") &&
+                text.Trim() != "┃" &&
+                text.Length > 5)
+                return text;
+        }
+        return StripAnsi(lines[offset]);
+    }
+
+    int FindAnchoredOffset(List<string> lines, string? anchorText, int fallbackOffset, int oldCount)
+    {
+        if (anchorText == null) return fallbackOffset;
+        for (int si = 0; si < lines.Count; si++)
+        {
+            if (StripAnsi(lines[si]) == anchorText)
+                return si;
+        }
+        if (oldCount > 0)
+            return Math.Min((int)((long)fallbackOffset * lines.Count / oldCount), Math.Max(0, lines.Count - 1));
+        return fallbackOffset;
+    }
+
     void RebuildContent()
     {
         var filter = filterIndex == 0 ? null : filterCycle[filterIndex];
-        if (isJsonlFormat && parsedData is JsonlData jd)
+        if (parsedData is JsonlData jd)
             contentLines = RenderJsonlContentLines(jd, filter, currentExpandTools);
         else if (parsedData is WazaData wd)
             contentLines = RenderWazaContentLines(wd, filter, currentExpandTools);
@@ -1288,6 +1574,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
         
         // Apply horizontal scroll offset
         var scrolledMarkup = hOffset > 0 ? SkipMarkupWidth(markupText, hOffset) : markupText;
+
         var visible = StripAnsi(scrolledMarkup);
         int visWidth = VisibleWidth(visible);
         
@@ -1537,7 +1824,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
                     lastWidth = curW;
                     lastHeight = curH;
                     // Rebuild header/content since header boxes are now width-dependent
-                    if (isJsonlFormat && parsedData is JsonlData jdResize)
+                    if (parsedData is JsonlData jdResize)
                         headerLines = RenderJsonlHeaderLines(jdResize);
                     else if (parsedData is WazaData wdResize)
                         headerLines = RenderWazaHeaderLines(wdResize);
@@ -1695,13 +1982,21 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
                             Render();
                             break;
                         case 't':
+                            var tAnchor = GetScrollAnchor(contentLines, scrollOffset);
+                            int tOldCount = contentLines.Count;
                             currentExpandTools = !currentExpandTools;
                             RebuildContent();
+                            scrollOffset = FindAnchoredOffset(contentLines, tAnchor, scrollOffset, tOldCount);
+                            ClampScroll();
                             Render();
                             break;
                         case 'f':
+                            var fAnchor = GetScrollAnchor(contentLines, scrollOffset);
+                            int fOldCount = contentLines.Count;
                             filterIndex = (filterIndex + 1) % filterCycle.Length;
                             RebuildContent();
+                            scrollOffset = FindAnchoredOffset(contentLines, fAnchor, scrollOffset, fOldCount);
+                            ClampScroll();
                             Render();
                             break;
                         case '/':
