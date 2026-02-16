@@ -1824,12 +1824,12 @@ string? BrowseSessions(string sessionStateDir)
                             {
                                 var text = c.GetString() ?? "";
                                 if (text.Length > 0 && claudeSummary == "")
-                                    claudeSummary = "[Claude] " + (text.Length > 80 ? text[..77] + "..." : text);
+                                    claudeSummary = text.Length > 80 ? text[..77] + "..." : text;
                             }
                             if (root.TryGetProperty("timestamp", out var ts) && ts.ValueKind == JsonValueKind.Number && ts.TryGetInt64(out var msTs))
                                 claudeUpdatedAt = DateTimeOffset.FromUnixTimeMilliseconds(msTs).UtcDateTime;
                         }
-                        if (claudeSummary == "") claudeSummary = "[Claude] " + Path.GetFileName(projDir).Replace("-", "\\");
+                        if (claudeSummary == "") claudeSummary = Path.GetFileName(projDir).Replace("-", "\\");
 
                         long fileSize = new FileInfo(jsonlFile).Length;
                         lock (sessionsLock)
@@ -1953,7 +1953,7 @@ string? BrowseSessions(string sessionStateDir)
                 cursorInfo = $" | {shortId} {updated}";
             }
         }
-        var headerText = $" 📋 Copilot CLI Sessions — {count} sessions{loadingStatus}{filterStatus}{cursorInfo}";
+        var headerText = $" 📋 Sessions — {count} sessions{loadingStatus}{filterStatus}{cursorInfo}";
         var escapedHeader = Markup.Escape(headerText);
         int headerVis = VisibleWidth(headerText);
         if (headerVis < w) escapedHeader += new string(' ', w - headerVis);
@@ -1978,12 +1978,13 @@ string? BrowseSessions(string sessionStateDir)
                 }
                 var age = FormatAge(DateTime.UtcNow - updatedAt);
                 var size = FormatFileSize(fileSize);
+                var icon = eventsPath.Contains(".claude") ? "🔴" : "🤖";
                 var display = !string.IsNullOrEmpty(summary) ? summary : cwd;
-                int maxDisplay = Math.Max(10, listWidth - 18);
+                int maxDisplay = Math.Max(10, listWidth - 21);
                 if (display.Length > maxDisplay) display = display[..(maxDisplay - 3)] + "...";
 
-                var rowPlain = $"  {age,6} {size,6} {display}";
-                var rowMarkup = $"  {age,6} {size,6} {Markup.Escape(display)}";
+                var rowPlain = $"  {icon} {age,6} {size,6} {display}";
+                var rowMarkup = $"  {icon} {age,6} {size,6} {Markup.Escape(display)}";
                 int rowVis = VisibleWidth(rowPlain);
                 if (rowVis < listWidth) rowMarkup += new string(' ', listWidth - rowVis);
                 else if (rowVis > listWidth)
