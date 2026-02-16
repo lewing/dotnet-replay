@@ -115,9 +115,6 @@ string Red(string s) => noColor ? s : $"[red]{Markup.Escape(s)}[/]";
 string Dim(string s) => noColor ? s : $"[dim]{Markup.Escape(s)}[/]";
 string Bold(string s) => noColor ? s : $"[bold]{Markup.Escape(s)}[/]";
 string Cyan(string s) => noColor ? s : $"[cyan]{Markup.Escape(s)}[/]";
-// Wrap pre-escaped content in a color tag without double-escaping
-string WrapColor(string colorName, string preEscapedContent) =>
-    noColor ? preEscapedContent : $"[{colorName}]{preEscapedContent}[/]";
 string Separator()
 {
     int width = 80;
@@ -129,7 +126,7 @@ string Separator()
 List<string> RenderMarkdownLines(string markdown, string colorName, string prefix = "┃ ")
 {
     if (noColor || string.IsNullOrEmpty(markdown))
-        return markdown.Split('\n').Select(l => WrapColor(colorName, $"{prefix}{l}")).ToList();
+        return markdown.Split('\n').Select(l => $"{prefix}{l}").ToList();
 
     var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
     var doc = Markdown.Parse(markdown, pipeline);
@@ -140,7 +137,21 @@ List<string> RenderMarkdownLines(string markdown, string colorName, string prefi
         RenderBlock(block, result, colorName, prefix, 0);
     }
 
-    return result;
+    // Filter consecutive blank separator lines (keep at most one between content)
+    var filtered = new List<string>();
+    bool lastWasBlank = false;
+    var blankPattern = noColor ? prefix.TrimEnd() : $"[{colorName}]{prefix.TrimEnd()}[/]";
+    
+    foreach (var line in result)
+    {
+        bool isBlank = line.Trim() == blankPattern.Trim() || GetVisibleText(line).Trim() == prefix.TrimEnd();
+        if (isBlank && lastWasBlank)
+            continue; // Skip consecutive blanks
+        filtered.Add(line);
+        lastWasBlank = isBlank;
+    }
+
+    return filtered;
 }
 
 void RenderBlock(Block block, List<string> lines, string colorName, string prefix, int depth)
@@ -151,30 +162,38 @@ void RenderBlock(Block block, List<string> lines, string colorName, string prefi
         {
             var text = RenderInlines(heading.Inline);
             var marker = Markup.Escape(new string('#', heading.Level) + " ");
-            lines.Add(WrapColor(colorName, $"{prefix}[bold]{marker}{text}[/]"));
-            lines.Add(WrapColor(colorName, prefix));
+            // Use compound tag to avoid nesting
+            lines.Add(noColor ? $"{prefix}{marker}{text}" : $"[{colorName} bold]{prefix}{marker}{text}[/]");
+            lines.Add(noColor ? prefix : $"[{colorName}]{prefix}[/]");
             break;
         }
         case ParagraphBlock para:
         {
             var text = RenderInlines(para.Inline);
             foreach (var line in text.Split('\n'))
-                lines.Add(WrapColor(colorName, $"{prefix}{line}"));
-            lines.Add(WrapColor(colorName, prefix));
+            {
+                // Text from RenderInlines may contain inline markup - wrap at line level
+                if (noColor)
+                    lines.Add($"{prefix}{line}");
+                else
+                    lines.Add($"[{colorName}]{prefix}{line}[/]");
+            }
+            lines.Add(noColor ? prefix : $"[{colorName}]{prefix}[/]");
             break;
         }
         case FencedCodeBlock fenced:
         {
             var lang = fenced.Info ?? "";
-            lines.Add(WrapColor(colorName, $"{prefix}[dim]```{Markup.Escape(lang)}[/]"));
+            // Use compound tag for dim styling
+            lines.Add(noColor ? $"{prefix}```{Markup.Escape(lang)}" : $"[{colorName} dim]{prefix}```{Markup.Escape(lang)}[/]");
             var codeLines = fenced.Lines;
             for (int i = 0; i < codeLines.Count; i++)
             {
                 var line = codeLines.Lines[i].ToString();
-                lines.Add(WrapColor(colorName, $"{prefix}  [dim]{Markup.Escape(line)}[/]"));
+                lines.Add(noColor ? $"{prefix}  {Markup.Escape(line)}" : $"[{colorName} dim]{prefix}  {Markup.Escape(line)}[/]");
             }
-            lines.Add(WrapColor(colorName, $"{prefix}[dim]```[/]"));
-            lines.Add(WrapColor(colorName, prefix));
+            lines.Add(noColor ? $"{prefix}```" : $"[{colorName} dim]{prefix}```[/]");
+            lines.Add(noColor ? prefix : $"[{colorName}]{prefix}[/]");
             break;
         }
         case CodeBlock code:
@@ -183,9 +202,9 @@ void RenderBlock(Block block, List<string> lines, string colorName, string prefi
             for (int i = 0; i < codeLines.Count; i++)
             {
                 var line = codeLines.Lines[i].ToString();
-                lines.Add(WrapColor(colorName, $"{prefix}  [dim]{Markup.Escape(line)}[/]"));
+                lines.Add(noColor ? $"{prefix}  {Markup.Escape(line)}" : $"[{colorName} dim]{prefix}  {Markup.Escape(line)}[/]");
             }
-            lines.Add(WrapColor(colorName, prefix));
+            lines.Add(noColor ? prefix : $"[{colorName}]{prefix}[/]");
             break;
         }
         case ListBlock list:
@@ -207,9 +226,19 @@ void RenderBlock(Block block, List<string> lines, string colorName, string prefi
                             foreach (var (line, idx) in text.Split('\n').Select((l, i) => (l, i)))
                             {
                                 if (idx == 0)
-                                    lines.Add(WrapColor(colorName, $"{prefix}{indent}{Markup.Escape(bullet)}{line}"));
+                                {
+                                    if (noColor)
+                                        lines.Add($"{prefix}{indent}{Markup.Escape(bullet)}{line}");
+                                    else
+                                        lines.Add($"[{colorName}]{prefix}{indent}{Markup.Escape(bullet)}{line}[/]");
+                                }
                                 else
-                                    lines.Add(WrapColor(colorName, $"{prefix}{indent}{new string(' ', bullet.Length)}{line}"));
+                                {
+                                    if (noColor)
+                                        lines.Add($"{prefix}{indent}{new string(' ', bullet.Length)}{line}");
+                                    else
+                                        lines.Add($"[{colorName}]{prefix}{indent}{new string(' ', bullet.Length)}{line}[/]");
+                                }
                             }
                             first = false;
                         }
@@ -221,18 +250,22 @@ void RenderBlock(Block block, List<string> lines, string colorName, string prefi
                     }
                 }
             }
-            lines.Add(WrapColor(colorName, prefix));
+            lines.Add(noColor ? prefix : $"[{colorName}]{prefix}[/]");
             break;
         }
         case ThematicBreakBlock:
         {
-            lines.Add(WrapColor(colorName, $"{prefix}[dim]───[/]"));
+            lines.Add(noColor ? $"{prefix}───" : $"[{colorName} dim]{prefix}───[/]");
             break;
         }
         case QuoteBlock quote:
         {
             foreach (var sub in quote)
-                RenderBlock(sub, lines, colorName, prefix + (noColor ? "▎ " : "[dim]▎ [/]"), depth);
+            {
+                // Quote prefix should not contain markup - handle dim styling in the block rendering
+                var quotePrefix = prefix + "▎ ";
+                RenderBlock(sub, lines, colorName, quotePrefix, depth);
+            }
             break;
         }
         default:
@@ -240,7 +273,12 @@ void RenderBlock(Block block, List<string> lines, string colorName, string prefi
             // Fallback: render raw text for unknown block types
             var rawLines = block.ToString()?.Split('\n') ?? [];
             foreach (var line in rawLines)
-                lines.Add(WrapColor(colorName, $"{prefix}{Markup.Escape(line)}"));
+            {
+                if (noColor)
+                    lines.Add($"{prefix}{Markup.Escape(line)}");
+                else
+                    lines.Add($"[{colorName}]{prefix}{Markup.Escape(line)}[/]");
+            }
             break;
         }
     }
@@ -287,14 +325,21 @@ string RenderInlines(ContainerInline? container)
     return sb.ToString();
 }
 
-string StripMarkup(string s) => Regex.Replace(s, @"\[/?\]|\[/?(?:blue|green|yellow|red|dim|bold|cyan|invert|on cyan black|italic|underline blue)\]", "");
+string StripMarkup(string s)
+{
+    // Preserve escaped brackets
+    s = s.Replace("[[", "\x01").Replace("]]", "\x02");
+    // Strip all markup tags
+    s = Regex.Replace(s, @"\[[^\[\]]*\]", "");
+    // Restore escaped brackets to their visible form
+    s = s.Replace("\x01", "[").Replace("\x02", "]");
+    return s;
+}
 
 string GetVisibleText(string s)
 {
-    var stripped = StripMarkup(s);
-    // Collapse Spectre escaped brackets to their visible form
-    stripped = stripped.Replace("[[", "[").Replace("]]", "]");
-    return stripped;
+    // StripMarkup now handles escaped brackets internally
+    return StripMarkup(s);
 }
 
 int VisibleWidth(string s)
