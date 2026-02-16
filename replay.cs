@@ -1,6 +1,6 @@
 #:property ToolCommandName=replay
 #:property PackageId=dotnet-replay
-#:property Version=0.3.0
+#:property Version=0.4.0
 #:property Authors=Larry Ewing
 #:property Description=Interactive transcript viewer for Copilot CLI sessions and waza evaluations
 #:property PackageLicenseExpression=MIT
@@ -8,11 +8,15 @@
 #:property PackageTags=copilot;transcript;viewer;waza;evaluation;cli
 #:property PublishAot=false
 #:package Spectre.Console@0.49.1
+#:package Markdig@0.40.0
 
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Markdig;
+using Markdig.Syntax;
+using Markdig.Syntax.Inlines;
 using Spectre.Console;
 
 Console.OutputEncoding = Encoding.UTF8;
@@ -111,6 +115,9 @@ string Red(string s) => noColor ? s : $"[red]{Markup.Escape(s)}[/]";
 string Dim(string s) => noColor ? s : $"[dim]{Markup.Escape(s)}[/]";
 string Bold(string s) => noColor ? s : $"[bold]{Markup.Escape(s)}[/]";
 string Cyan(string s) => noColor ? s : $"[cyan]{Markup.Escape(s)}[/]";
+// Wrap pre-escaped content in a color tag without double-escaping
+string WrapColor(string colorName, string preEscapedContent) =>
+    noColor ? preEscapedContent : $"[{colorName}]{preEscapedContent}[/]";
 string Separator()
 {
     int width = 80;
@@ -118,7 +125,169 @@ string Separator()
     return Dim(new string('─', Math.Max(1, width - 1)));
 }
 
-string StripMarkup(string s) => Regex.Replace(s, @"\[/?\]|\[/?(?:blue|green|yellow|red|dim|bold|cyan|invert|on cyan black)\]", "");
+// --- Markdown rendering via Markdig ---
+List<string> RenderMarkdownLines(string markdown, string colorName, string prefix = "┃ ")
+{
+    if (noColor || string.IsNullOrEmpty(markdown))
+        return markdown.Split('\n').Select(l => WrapColor(colorName, $"{prefix}{l}")).ToList();
+
+    var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
+    var doc = Markdown.Parse(markdown, pipeline);
+    var result = new List<string>();
+
+    foreach (var block in doc)
+    {
+        RenderBlock(block, result, colorName, prefix, 0);
+    }
+
+    return result;
+}
+
+void RenderBlock(Block block, List<string> lines, string colorName, string prefix, int depth)
+{
+    switch (block)
+    {
+        case HeadingBlock heading:
+        {
+            var text = RenderInlines(heading.Inline);
+            var marker = Markup.Escape(new string('#', heading.Level) + " ");
+            lines.Add(WrapColor(colorName, $"{prefix}[bold]{marker}{text}[/]"));
+            lines.Add(WrapColor(colorName, prefix));
+            break;
+        }
+        case ParagraphBlock para:
+        {
+            var text = RenderInlines(para.Inline);
+            foreach (var line in text.Split('\n'))
+                lines.Add(WrapColor(colorName, $"{prefix}{line}"));
+            lines.Add(WrapColor(colorName, prefix));
+            break;
+        }
+        case FencedCodeBlock fenced:
+        {
+            var lang = fenced.Info ?? "";
+            lines.Add(WrapColor(colorName, $"{prefix}[dim]```{Markup.Escape(lang)}[/]"));
+            var codeLines = fenced.Lines;
+            for (int i = 0; i < codeLines.Count; i++)
+            {
+                var line = codeLines.Lines[i].ToString();
+                lines.Add(WrapColor(colorName, $"{prefix}  [dim]{Markup.Escape(line)}[/]"));
+            }
+            lines.Add(WrapColor(colorName, $"{prefix}[dim]```[/]"));
+            lines.Add(WrapColor(colorName, prefix));
+            break;
+        }
+        case CodeBlock code:
+        {
+            var codeLines = code.Lines;
+            for (int i = 0; i < codeLines.Count; i++)
+            {
+                var line = codeLines.Lines[i].ToString();
+                lines.Add(WrapColor(colorName, $"{prefix}  [dim]{Markup.Escape(line)}[/]"));
+            }
+            lines.Add(WrapColor(colorName, prefix));
+            break;
+        }
+        case ListBlock list:
+        {
+            int itemNum = 0;
+            foreach (var item in list)
+            {
+                if (item is ListItemBlock listItem)
+                {
+                    itemNum++;
+                    var bullet = list.IsOrdered ? $"{itemNum}. " : "• ";
+                    var indent = new string(' ', depth * 2);
+                    bool first = true;
+                    foreach (var sub in listItem)
+                    {
+                        if (first && sub is ParagraphBlock p)
+                        {
+                            var text = RenderInlines(p.Inline);
+                            foreach (var (line, idx) in text.Split('\n').Select((l, i) => (l, i)))
+                            {
+                                if (idx == 0)
+                                    lines.Add(WrapColor(colorName, $"{prefix}{indent}{Markup.Escape(bullet)}{line}"));
+                                else
+                                    lines.Add(WrapColor(colorName, $"{prefix}{indent}{new string(' ', bullet.Length)}{line}"));
+                            }
+                            first = false;
+                        }
+                        else
+                        {
+                            RenderBlock(sub, lines, colorName, prefix + indent + new string(' ', bullet.Length), depth + 1);
+                            first = false;
+                        }
+                    }
+                }
+            }
+            lines.Add(WrapColor(colorName, prefix));
+            break;
+        }
+        case ThematicBreakBlock:
+        {
+            lines.Add(WrapColor(colorName, $"{prefix}[dim]───[/]"));
+            break;
+        }
+        case QuoteBlock quote:
+        {
+            foreach (var sub in quote)
+                RenderBlock(sub, lines, colorName, prefix + (noColor ? "▎ " : "[dim]▎ [/]"), depth);
+            break;
+        }
+        default:
+        {
+            // Fallback: render raw text for unknown block types
+            var rawLines = block.ToString()?.Split('\n') ?? [];
+            foreach (var line in rawLines)
+                lines.Add(WrapColor(colorName, $"{prefix}{Markup.Escape(line)}"));
+            break;
+        }
+    }
+}
+
+string RenderInlines(ContainerInline? container)
+{
+    if (container == null) return "";
+    var sb = new StringBuilder();
+    foreach (var inline in container)
+    {
+        switch (inline)
+        {
+            case LiteralInline lit:
+                sb.Append(Markup.Escape(lit.Content.ToString()));
+                break;
+            case EmphasisInline em:
+                var inner = RenderInlines(em);
+                if (em.DelimiterCount >= 2)
+                    sb.Append(noColor ? inner : $"[bold]{inner}[/]");
+                else
+                    sb.Append(noColor ? inner : $"[italic]{inner}[/]");
+                break;
+            case CodeInline code:
+                sb.Append(noColor ? code.Content : $"[cyan]{Markup.Escape(code.Content)}[/]");
+                break;
+            case LinkInline link:
+                var linkText = RenderInlines(link);
+                var url = link.Url ?? "";
+                if (string.IsNullOrEmpty(linkText)) linkText = Markup.Escape(url);
+                sb.Append(noColor ? $"{linkText} ({url})" : $"[underline blue]{linkText}[/] [dim]({Markup.Escape(url)})[/]");
+                break;
+            case LineBreakInline:
+                sb.Append('\n');
+                break;
+            case HtmlInline html:
+                sb.Append(Markup.Escape(html.Tag));
+                break;
+            default:
+                sb.Append(Markup.Escape(inline.ToString() ?? ""));
+                break;
+        }
+    }
+    return sb.ToString();
+}
+
+string StripMarkup(string s) => Regex.Replace(s, @"\[/?\]|\[/?(?:blue|green|yellow|red|dim|bold|cyan|invert|on cyan black|italic|underline blue)\]", "");
 
 string GetVisibleText(string s)
 {
@@ -991,8 +1160,8 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
                 var content = SafeGetString(data, "content");
                 lines.Add(margin + Green("┃ ASSISTANT"));
                 if (!string.IsNullOrEmpty(content))
-                    foreach (var line in content.Split('\n'))
-                        lines.Add(margin + Green($"┃ {line}"));
+                    foreach (var line in RenderMarkdownLines(content, "green"))
+                        lines.Add(margin + line);
                 if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("toolRequests", out var toolReqs)
                     && toolReqs.ValueKind == JsonValueKind.Array)
                 {
@@ -1153,8 +1322,8 @@ List<string> RenderWazaContentLines(WazaData d, string? filter, bool expandTool)
         else if (isAssistantMessage)
         {
             lines.Add(margin + Green("┃ ASSISTANT"));
-            foreach (var line in content.Split('\n'))
-                lines.Add(margin + Green($"┃ {line}"));
+            foreach (var line in RenderMarkdownLines(content, "green"))
+                lines.Add(margin + line);
         }
         else if (isToolEvent)
         {
