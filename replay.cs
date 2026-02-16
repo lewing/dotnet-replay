@@ -1363,6 +1363,19 @@ List<string> RenderWazaContentLines(WazaData d, string? filter, bool expandTool)
     List<string> lines = [];
     if (d.TranscriptItems.Length == 0) { lines.Add(Dim("  No events found")); return lines; }
 
+    // Pre-scan: build tool_call_id → tool_name map from execution_start events
+    var toolCallNames = new Dictionary<string, string>();
+    foreach (var ti in d.TranscriptItems)
+    {
+        if (SafeGetString(ti, "type").Equals("tool.execution_start", StringComparison.OrdinalIgnoreCase))
+        {
+            var tcId = SafeGetString(ti, "tool_call_id");
+            var tcName = SafeGetString(ti, "tool_name");
+            if (!string.IsNullOrEmpty(tcId) && !string.IsNullOrEmpty(tcName))
+                toolCallNames[tcId] = tcName;
+        }
+    }
+
     int turnIndex = 0;
     // Track message index to alternate user/assistant for "message" type events
     int messageIndex = 0;
@@ -1372,6 +1385,13 @@ List<string> RenderWazaContentLines(WazaData d, string? filter, bool expandTool)
         var content = SafeGetString(item, "content");
         if (string.IsNullOrEmpty(content)) content = SafeGetString(item, "message");
         var toolName = SafeGetString(item, "tool_name");
+        // Resolve tool_name from pre-scan map if missing (e.g. tool.execution_complete events)
+        if (string.IsNullOrEmpty(toolName))
+        {
+            var callId = SafeGetString(item, "tool_call_id");
+            if (!string.IsNullOrEmpty(callId) && toolCallNames.TryGetValue(callId, out var mapped))
+                toolName = mapped;
+        }
 
         // Classify "message" type: first message is user, tool-adjacent messages are assistant
         bool isUserMessage = itemType is "user" or "user_message" or "user.message" or "human"
@@ -1397,6 +1417,9 @@ List<string> RenderWazaContentLines(WazaData d, string? filter, bool expandTool)
             };
             if (!match) continue;
         }
+
+        // Skip partial_result heartbeat events — zero payload, pure noise
+        if (itemType == "tool.execution_partial_result") continue;
 
         turnIndex++;
         var margin = Dim($"  {turnIndex,5}  ");
@@ -1445,6 +1468,11 @@ List<string> RenderWazaContentLines(WazaData d, string? filter, bool expandTool)
                 }
                 if (!string.IsNullOrEmpty(content))
                     lines.Add(margin + Dim($"┃   {Truncate(content, 500)}"));
+            }
+            else if (itemType == "tool.execution_complete" && item.TryGetProperty("tool_result", out var collapsedRes) && collapsedRes.ValueKind != JsonValueKind.Null)
+            {
+                var charCount = ExtractContentString(collapsedRes).Length;
+                lines.Add(margin + Dim($"┃   ({charCount} chars)"));
             }
             if (!isSuccess)
                 lines.Add(margin + Red("┃ ❌ Failed"));
