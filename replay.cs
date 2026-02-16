@@ -1616,6 +1616,10 @@ string? BrowseSessions(string sessionStateDir)
     bool inSearch = false;
     string searchFilter = "";
     var searchBuf = new StringBuilder();
+    bool showPreview = false;
+    string? previewSessionId = null;
+    List<string> previewLines = new();
+    int previewScroll = 0;
     List<int> filtered = new(); // indices into allSessions
 
     void RebuildFiltered()
@@ -1653,11 +1657,45 @@ string? BrowseSessions(string sessionStateDir)
         scrollTop = Math.Max(0, scrollTop);
     }
 
+    void LoadPreview()
+    {
+        if (filtered.Count == 0 || cursorIdx >= filtered.Count) { previewLines.Clear(); return; }
+        string eventsPath;
+        string id;
+        lock (sessionsLock)
+        {
+            var s = allSessions[filtered[cursorIdx]];
+            eventsPath = s.eventsPath;
+            id = s.id;
+        }
+        if (id == previewSessionId) return;
+        previewSessionId = id;
+        previewScroll = 0;
+        try
+        {
+            var data = ParseJsonlData(eventsPath);
+            if (data == null) { previewLines = new List<string> { "", "  (unable to load preview)" }; return; }
+            if (data.Turns.Count > 50)
+                data = data with { Turns = data.Turns.Skip(data.Turns.Count - 50).ToList() };
+            previewLines = RenderJsonlContentLines(data, null, false);
+            previewScroll = Math.Max(0, previewLines.Count - ViewHeight());
+        }
+        catch
+        {
+            previewLines = new List<string> { "", "  (unable to load preview)" };
+            previewScroll = 0;
+        }
+    }
+
     void Render()
     {
         int w;
         try { w = AnsiConsole.Profile.Width; } catch { w = 80; }
         int vh = ViewHeight();
+        int listWidth = showPreview ? Math.Max(30, w * 2 / 5) : w;
+        int previewWidth = w - listWidth;
+
+        if (showPreview) LoadPreview();
 
         Console.CursorVisible = false;
         AnsiConsole.Cursor.SetPosition(0, 1);
@@ -1685,46 +1723,82 @@ string? BrowseSessions(string sessionStateDir)
         try { AnsiConsole.Markup($"[bold invert]{escapedHeader}[/]"); }
         catch { Console.Write(headerText); }
 
-        // Session rows
+        // Content rows
         for (int vi = scrollTop; vi < scrollTop + vh; vi++)
         {
             AnsiConsole.Cursor.SetPosition(0, vi - scrollTop + 2);
+
+            // Left side: session list
             if (vi < filtered.Count)
             {
-                int si;
                 string id, summary, cwd, eventsPath;
                 DateTime updatedAt;
                 long fileSize;
                 lock (sessionsLock)
                 {
-                    si = filtered[vi];
+                    var si = filtered[vi];
                     (id, summary, cwd, updatedAt, eventsPath, fileSize) = allSessions[si];
                 }
                 var age = FormatAge(DateTime.UtcNow - updatedAt);
                 var size = FormatFileSize(fileSize);
                 var display = !string.IsNullOrEmpty(summary) ? summary : cwd;
-                int maxDisplay = Math.Max(10, w - 18);
+                int maxDisplay = Math.Max(10, listWidth - 18);
                 if (display.Length > maxDisplay) display = display[..(maxDisplay - 3)] + "...";
 
-                var rowText = $"  {age,6} {size,6} {Markup.Escape(display)}";
-                int rowVis = VisibleWidth($"  {age,6} {size,6} {display}");
-                if (rowVis < w) rowText += new string(' ', w - rowVis);
+                var rowPlain = $"  {age,6} {size,6} {display}";
+                var rowMarkup = $"  {age,6} {size,6} {Markup.Escape(display)}";
+                int rowVis = VisibleWidth(rowPlain);
+                if (rowVis < listWidth) rowMarkup += new string(' ', listWidth - rowVis);
+                else if (rowVis > listWidth)
+                {
+                    rowPlain = TruncateToWidth(rowPlain, listWidth);
+                    rowMarkup = Markup.Escape(rowPlain);
+                }
 
                 bool isCursor = vi == cursorIdx;
                 if (isCursor)
                 {
-                    try { AnsiConsole.Markup($"[invert]{rowText}[/]"); }
-                    catch { Console.Write($"  {age,6} {size,6} {display}"); }
+                    try { AnsiConsole.Markup($"[invert]{rowMarkup}[/]"); }
+                    catch { Console.Write(rowPlain); }
                 }
                 else
                 {
-                    try { AnsiConsole.Markup(rowText); }
-                    catch { Console.Write($"  {age,6} {size,6} {display}"); }
+                    try { AnsiConsole.Markup(rowMarkup); }
+                    catch { Console.Write(rowPlain); }
                 }
             }
             else
             {
-                Console.Write(new string(' ', w));
+                Console.Write(new string(' ', listWidth));
+            }
+
+            // Right side: preview panel
+            if (showPreview)
+            {
+                int previewRow = vi - scrollTop + previewScroll;
+                if (previewRow >= 0 && previewRow < previewLines.Count)
+                {
+                    var pLine = previewLines[previewRow];
+                    var pVisible = StripMarkup(pLine);
+                    pVisible = GetVisibleText(pVisible);
+                    int pVisWidth = VisibleWidth(pVisible);
+                    if (pVisWidth >= previewWidth)
+                    {
+                        var truncated = TruncateMarkupToWidth(pLine, previewWidth - 1);
+                        try { AnsiConsole.Markup(truncated); }
+                        catch { Console.Write(TruncateToWidth(pVisible, previewWidth - 1) + "…"); }
+                    }
+                    else
+                    {
+                        int padding = previewWidth - pVisWidth;
+                        try { AnsiConsole.Markup(pLine + new string(' ', padding)); }
+                        catch { Console.Write(pVisible + new string(' ', padding)); }
+                    }
+                }
+                else
+                {
+                    Console.Write(new string(' ', previewWidth));
+                }
             }
         }
 
@@ -1734,7 +1808,10 @@ string? BrowseSessions(string sessionStateDir)
         if (inSearch)
             statusText = $" Filter: {searchBuf}_";
         else
-            statusText = " ↑↓ navigate | Enter open | / filter | q quit";
+        {
+            var previewHint = showPreview ? "i close preview" : "i preview";
+            statusText = $" ↑↓ navigate | Enter open | / filter | {previewHint} | q quit";
+        }
         var escapedStatus = Markup.Escape(statusText);
         int statusVis = VisibleWidth(statusText);
         if (statusVis < w) escapedStatus += new string(' ', w - statusVis);
@@ -1909,6 +1986,30 @@ string? BrowseSessions(string sessionStateDir)
                         cursorIdx = Math.Max(0, filtered.Count - 1);
                         ClampCursor();
                         Render();
+                        break;
+                    case 'i':
+                        showPreview = !showPreview;
+                        if (showPreview)
+                        {
+                            previewSessionId = null;
+                            LoadPreview();
+                        }
+                        AnsiConsole.Clear();
+                        Render();
+                        break;
+                    case '{':
+                        if (showPreview)
+                        {
+                            previewScroll = Math.Max(0, previewScroll - ViewHeight() / 2);
+                            Render();
+                        }
+                        break;
+                    case '}':
+                        if (showPreview)
+                        {
+                            previewScroll = Math.Min(Math.Max(0, previewLines.Count - ViewHeight()), previewScroll + ViewHeight() / 2);
+                            Render();
+                        }
                         break;
                 }
                 break;
