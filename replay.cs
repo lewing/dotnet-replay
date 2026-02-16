@@ -598,10 +598,22 @@ JsonlData? ParseClaudeData(string path)
                         {
                             if (tc.ValueKind == JsonValueKind.String)
                                 content = tc.GetString() ?? "";
+                            else if (tc.ValueKind == JsonValueKind.Array)
+                            {
+                                // tool_result content can be an array of {type:"text",text:"..."}
+                                var parts = new List<string>();
+                                foreach (var part in tc.EnumerateArray())
+                                    if (SafeGetString(part, "type") == "text")
+                                        parts.Add(part.TryGetProperty("text", out var pt) ? pt.GetString() ?? "" : "");
+                                content = string.Join("\n", parts);
+                            }
                             else
                                 content = tc.GetRawText();
                         }
-                        var syntheticJson = $"{{\"type\":\"tool.result\",\"data\":{{\"tool_result\":{JsonSerializer.Serialize(content)},\"name\":\"\"}}}}";
+                        var isError = block.TryGetProperty("is_error", out var ie) && ie.ValueKind == JsonValueKind.True;
+                        var status = isError ? "error" : "success";
+                        var toolUseId = SafeGetString(block, "tool_use_id");
+                        var syntheticJson = $"{{\"type\":\"tool.result\",\"data\":{{\"toolUseId\":{JsonSerializer.Serialize(toolUseId)},\"result\":{{\"content\":{JsonSerializer.Serialize(content)},\"status\":{JsonSerializer.Serialize(status)}}}}}}}";
                         var synDoc = JsonDocument.Parse(syntheticJson);
                         turns.Add(("tool.result", synDoc.RootElement, ts));
                         isToolResult = true;
@@ -650,12 +662,22 @@ JsonlData? ParseClaudeData(string path)
                     else if (blockType == "tool_use")
                     {
                         var toolName = SafeGetString(block, "name");
+                        var toolUseId = SafeGetString(block, "id");
                         var input = block.TryGetProperty("input", out var inp) ? inp.GetRawText() : "{}";
-                        var syntheticJson = $"{{\"type\":\"tool.execution_start\",\"data\":{{\"name\":{JsonSerializer.Serialize(toolName)},\"arguments\":{input}}}}}";
+                        var syntheticJson = $"{{\"type\":\"tool.execution_start\",\"data\":{{\"toolName\":{JsonSerializer.Serialize(toolName)},\"toolUseId\":{JsonSerializer.Serialize(toolUseId)},\"arguments\":{input}}}}}";
                         var synDoc = JsonDocument.Parse(syntheticJson);
                         turns.Add(("tool.execution_start", synDoc.RootElement, ts));
                     }
-                    // Skip "thinking" blocks
+                    else if (blockType == "thinking")
+                    {
+                        var text = block.TryGetProperty("thinking", out var th) ? th.GetString() ?? "" : "";
+                        if (!string.IsNullOrWhiteSpace(text))
+                        {
+                            var syntheticJson = $"{{\"type\":\"assistant.thinking\",\"data\":{{\"content\":{JsonSerializer.Serialize(text)}}}}}";
+                            var synDoc = JsonDocument.Parse(syntheticJson);
+                            turns.Add(("assistant.thinking", synDoc.RootElement, ts));
+                        }
+                    }
                 }
             }
         }
@@ -907,7 +929,7 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
         filtered = filtered.Where(t => filter switch
         {
             "user" => t.type == "user.message",
-            "assistant" => t.type == "assistant.message",
+            "assistant" => t.type is "assistant.message" or "assistant.thinking",
             "tool" => t.type is "tool.execution_start" or "tool.result",
             "error" => t.type == "tool.result" && t.root.TryGetProperty("data", out var dd)
                        && dd.TryGetProperty("result", out var r) && SafeGetString(r, "status") == "error",
@@ -954,6 +976,27 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
                         lines.Add(margin + Yellow($"┃ 🔧 Tool request: {tn}"));
                     }
                 }
+                // Copilot CLI reasoning (thinking)
+                if (expandTool && data.ValueKind == JsonValueKind.Object)
+                {
+                    var reasoning = SafeGetString(data, "reasoningText");
+                    if (!string.IsNullOrEmpty(reasoning))
+                    {
+                        lines.Add(margin + Dim("┃ 💭 Thinking:"));
+                        foreach (var line in reasoning.Split('\n'))
+                            lines.Add(margin + Dim($"┃   {line}"));
+                    }
+                }
+                break;
+            }
+            case "assistant.thinking":
+            {
+                if (!expandTool) break;
+                var content = SafeGetString(data, "content");
+                if (string.IsNullOrEmpty(content)) break;
+                lines.Add(margin + Dim("┃ 💭 THINKING"));
+                foreach (var line in content.Split('\n'))
+                    lines.Add(margin + Dim($"┃   {line}"));
                 break;
             }
             case "tool.execution_start":
@@ -1322,7 +1365,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
         {
             var followIndicator = following ? (userAtBottom ? " LIVE" : " [new content ↓]") : "";
             var colIndicator = scrollX > 0 ? $" Col {scrollX}+" : "";
-            statusText = $" Line {currentLine}/{contentLines.Count}{colIndicator} | Filter: {statusFilter}{followIndicator} | ←→ h/l pan | / search | q quit";
+            statusText = $" Line {currentLine}/{contentLines.Count}{colIndicator} | Filter: {statusFilter}{followIndicator} | t tools/thinking | / search | q quit";
         }
         var escapedStatus = Markup.Escape(statusText);
         int statusVisLen = VisibleWidth(statusText);
@@ -2238,7 +2281,7 @@ Usage: replay [file|session-id] [options]
 
 Options:
   --tail <N>          Show only the last N conversation turns
-  --expand-tools      Show tool call arguments and results
+  --expand-tools      Show tool arguments, results, and thinking/reasoning
   --full              Don't truncate tool output (use with --expand-tools)
   --filter <type>     Filter by event type: user, assistant, tool, error
   --no-color          Disable ANSI colors

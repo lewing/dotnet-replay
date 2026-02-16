@@ -40,18 +40,18 @@ With a local install, use `dotnet replay` instead.
 ### Session Browser
 
 ```bash
-replay                      # Browse recent Copilot CLI sessions
+replay                      # Browse recent Copilot CLI and Claude Code sessions
 replay <session-id>         # Open a session by GUID
 ```
 
-Run with no arguments to interactively browse your Copilot CLI sessions. Sessions are loaded asynchronously and can be filtered with `/`.
+Run with no arguments to interactively browse your Copilot CLI and Claude Code sessions. Sessions are loaded asynchronously and can be filtered with `/`.
 
 ### Interactive Mode (Default)
 
 ```bash
 replay <file>               # Interactive pager with keybindings
 replay <file> --tail 10     # Show only the last 10 turns
-replay <file> --expand-tools # Show tool call arguments and results
+replay <file> --expand-tools # Show tool args, results, and thinking
 replay <file> --full        # Don't truncate long content
 replay <file> --filter user # Filter by event type (user, assistant, tool, error)
 replay <file> --no-color    # Disable ANSI colors
@@ -72,6 +72,7 @@ replay <file> | less        # Auto-switches to stream mode when piped
 ## Supported Formats
 
 - **Copilot CLI events** (`.jsonl`) — Session transcripts from GitHub Copilot CLI
+- **Claude Code sessions** (`.jsonl`) — Session transcripts from Claude Code (`~/.claude/projects/`)
 - **Waza evaluation results** (`.json`) — EvaluationOutcome format with `tasks[].runs[].transcript[]`
 - **Waza task transcripts** (`.json`) — Flat JSON with `transcript[]` array and optional `session_digest`
 
@@ -89,7 +90,7 @@ replay <file> | less        # Auto-switches to stream mode when piped
 | **Space** | Page down |
 | **g** or **Home** | Jump to start of transcript |
 | **G** or **End** | Jump to end of transcript |
-| **t** | Toggle tool expansion (show/hide call args and results) |
+| **t** | Toggle tool expansion (show/hide args, results, and thinking) |
 | **f** | Cycle filter: all → user → assistant → tool → error |
 | **i** | Toggle session info overlay |
 | **/** | Enter search mode |
