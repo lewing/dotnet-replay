@@ -2,7 +2,6 @@ name: Publish Tool
 
 permissions:
   id-token: write
-  contents: write
 
 on:
   push:
@@ -40,13 +39,6 @@ jobs:
 
       - name: Pack
         run: dotnet pack replay.cs -c Release -o nupkg /p:Version=${{ steps.tag_name.outputs.current_version }}
-
-      - name: Create Release
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: nupkg/*.nupkg
-          token: ${{ secrets.GITHUB_TOKEN }}
-          body: "Release ${{ github.ref_name }}"
 
       - name: NuGet login
         uses: NuGet/login@v1
