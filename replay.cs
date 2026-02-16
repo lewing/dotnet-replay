@@ -1002,11 +1002,30 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
             case "tool.execution_start":
             {
                 var toolName = SafeGetString(data, "toolName");
-                lines.Add(margin + Yellow($"┃ TOOL: {toolName}"));
-                if (expandTool && data.ValueKind == JsonValueKind.Object && data.TryGetProperty("arguments", out var toolArgs))
+                // Enrich tool display with context from arguments
+                var toolContext = "";
+                if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("arguments", out var toolArgs))
+                {
+                    toolContext = toolName switch
+                    {
+                        "Read" or "Write" or "Edit" or "MultiEdit" =>
+                            toolArgs.TryGetProperty("file_path", out var fp) ? Path.GetFileName(fp.GetString() ?? "") : "",
+                        "Bash" =>
+                            toolArgs.TryGetProperty("description", out var desc) ? desc.GetString() ?? "" :
+                            toolArgs.TryGetProperty("command", out var cmd) ? Truncate(cmd.GetString() ?? "", 60) : "",
+                        "Glob" or "Grep" =>
+                            toolArgs.TryGetProperty("pattern", out var pat) ? pat.GetString() ?? "" : "",
+                        "Task" =>
+                            toolArgs.TryGetProperty("description", out var td) ? td.GetString() ?? "" : "",
+                        _ => ""
+                    };
+                }
+                var toolLabel = string.IsNullOrEmpty(toolContext) ? $"TOOL: {toolName}" : $"TOOL: {toolName} — {toolContext}";
+                lines.Add(margin + Yellow($"┃ {toolLabel}"));
+                if (expandTool && data.ValueKind == JsonValueKind.Object && data.TryGetProperty("arguments", out var toolArgs2))
                 {
                     lines.Add(margin + Dim("┃   Args:"));
-                    foreach (var pl in FormatJsonProperties(toolArgs, "┃     ", 500))
+                    foreach (var pl in FormatJsonProperties(toolArgs2, "┃     ", 500))
                         lines.Add(margin + Dim(pl));
                 }
                 break;
@@ -1024,7 +1043,10 @@ List<string> RenderJsonlContentLines(JsonlData d, string? filter, bool expandToo
                 }
                 var isError = status == "error";
                 var colorFn = isError ? (Func<string, string>)Red : Dim;
-                lines.Add(margin + colorFn(isError ? "┃ ❌ ERROR" : "┃ ✅ Result"));
+                var resultSummary = isError ? "┃ ❌ ERROR" : "┃ ✅ Result";
+                if (!expandTool && !string.IsNullOrEmpty(resultContent))
+                    resultSummary += $" ({resultContent.Length:N0} chars)";
+                lines.Add(margin + colorFn(resultSummary));
                 if (expandTool && !string.IsNullOrEmpty(resultContent))
                 {
                     if (resultContent.Any(c => char.IsControl(c) && c != '\n' && c != '\r' && c != '\t'))
