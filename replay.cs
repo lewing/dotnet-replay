@@ -1560,98 +1560,347 @@ string? BrowseSessions(string sessionStateDir)
         return null;
     }
 
-    // Scan sessions
-    var sessions = new List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPath, long fileSize)>();
-    foreach (var dir in Directory.GetDirectories(sessionStateDir))
-    {
-        var yamlPath = Path.Combine(dir, "workspace.yaml");
-        var eventsPath = Path.Combine(dir, "events.jsonl");
-        if (!File.Exists(yamlPath) || !File.Exists(eventsPath)) continue;
+    var allSessions = new List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPath, long fileSize)>();
+    var sessionsLock = new object();
+    bool scanComplete = false;
+    int lastRenderedCount = -1;
 
-        var props = new Dictionary<string, string>();
-        try
+    // Background scan thread
+    var scanThread = new Thread(() =>
+    {
+        foreach (var dir in Directory.GetDirectories(sessionStateDir))
         {
-            foreach (var line in File.ReadLines(yamlPath))
+            var yamlPath = Path.Combine(dir, "workspace.yaml");
+            var eventsPath = Path.Combine(dir, "events.jsonl");
+            if (!File.Exists(yamlPath) || !File.Exists(eventsPath)) continue;
+
+            var props = new Dictionary<string, string>();
+            try
             {
-                var colonIdx = line.IndexOf(':');
-                if (colonIdx > 0)
+                foreach (var line in File.ReadLines(yamlPath))
                 {
-                    var key = line[..colonIdx].Trim();
-                    var value = line[(colonIdx + 1)..].Trim().Trim('"');
-                    props[key] = value;
+                    var colonIdx = line.IndexOf(':');
+                    if (colonIdx > 0)
+                    {
+                        var key = line[..colonIdx].Trim();
+                        var value = line[(colonIdx + 1)..].Trim().Trim('"');
+                        props[key] = value;
+                    }
                 }
             }
+            catch { continue; }
+
+            var id = props.GetValueOrDefault("id", Path.GetFileName(dir));
+            var summary = props.GetValueOrDefault("summary", "");
+            var cwd = props.GetValueOrDefault("cwd", "");
+            var updatedStr = props.GetValueOrDefault("updated_at", "");
+            DateTime.TryParse(updatedStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var updatedAt);
+
+            long fileSize = 0;
+            try { fileSize = new FileInfo(eventsPath).Length; } catch { }
+
+            lock (sessionsLock)
+            {
+                allSessions.Add((id, summary, cwd, updatedAt, eventsPath, fileSize));
+                allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+            }
         }
-        catch { continue; }
+        scanComplete = true;
+    });
+    scanThread.IsBackground = true;
+    scanThread.Start();
 
-        var id = props.GetValueOrDefault("id", Path.GetFileName(dir));
-        var summary = props.GetValueOrDefault("summary", "");
-        var cwd = props.GetValueOrDefault("cwd", "");
-        var updatedStr = props.GetValueOrDefault("updated_at", "");
-        DateTime.TryParse(updatedStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var updatedAt);
+    // Interactive UI state
+    int cursorIdx = 0;
+    int scrollTop = 0;
+    bool inSearch = false;
+    string searchFilter = "";
+    var searchBuf = new StringBuilder();
+    List<int> filtered = new(); // indices into allSessions
 
-        long fileSize = 0;
-        try { fileSize = new FileInfo(eventsPath).Length; } catch { }
-
-        sessions.Add((id, summary, cwd, updatedAt, eventsPath, fileSize));
-    }
-
-    if (sessions.Count == 0)
+    void RebuildFiltered()
     {
-        Console.Error.WriteLine("No sessions found.");
-        return null;
+        filtered.Clear();
+        lock (sessionsLock)
+        {
+            for (int i = 0; i < allSessions.Count; i++)
+            {
+                if (searchFilter.Length > 0)
+                {
+                    var s = allSessions[i];
+                    var text = $"{s.summary} {s.cwd} {s.id}";
+                    if (!text.Contains(searchFilter, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                }
+                filtered.Add(i);
+            }
+        }
     }
 
-    sessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+    int ViewHeight()
+    {
+        try { return Math.Max(3, AnsiConsole.Profile.Height - 3); }
+        catch { return 20; }
+    }
 
-    int pageSize = 20;
-    int page = 0;
-    int totalPages = (sessions.Count + pageSize - 1) / pageSize;
+    void ClampCursor()
+    {
+        if (filtered.Count == 0) { cursorIdx = 0; scrollTop = 0; return; }
+        cursorIdx = Math.Max(0, Math.Min(cursorIdx, filtered.Count - 1));
+        int vh = ViewHeight();
+        if (cursorIdx < scrollTop) scrollTop = cursorIdx;
+        if (cursorIdx >= scrollTop + vh) scrollTop = cursorIdx - vh + 1;
+        scrollTop = Math.Max(0, scrollTop);
+    }
+
+    void Render()
+    {
+        int w;
+        try { w = AnsiConsole.Profile.Width; } catch { w = 80; }
+        int vh = ViewHeight();
+
+        Console.CursorVisible = false;
+        AnsiConsole.Cursor.SetPosition(0, 1);
+
+        // Header
+        int count;
+        lock (sessionsLock) { count = allSessions.Count; }
+        var loadingStatus = scanComplete ? "" : " Loading...";
+        var filterStatus = searchFilter.Length > 0 ? $" filter: \"{searchFilter}\" ({filtered.Count} matches)" : "";
+        var headerText = $" 📋 Copilot CLI Sessions — {count} sessions{loadingStatus}{filterStatus}";
+        var escapedHeader = Markup.Escape(headerText);
+        int headerVis = VisibleWidth(headerText);
+        if (headerVis < w) escapedHeader += new string(' ', w - headerVis);
+        try { AnsiConsole.Markup($"[bold invert]{escapedHeader}[/]"); }
+        catch { Console.Write(headerText); }
+
+        // Session rows
+        for (int vi = scrollTop; vi < scrollTop + vh; vi++)
+        {
+            AnsiConsole.Cursor.SetPosition(0, vi - scrollTop + 2);
+            if (vi < filtered.Count)
+            {
+                int si;
+                string id, summary, cwd, eventsPath;
+                DateTime updatedAt;
+                long fileSize;
+                lock (sessionsLock)
+                {
+                    si = filtered[vi];
+                    (id, summary, cwd, updatedAt, eventsPath, fileSize) = allSessions[si];
+                }
+                var age = FormatAge(DateTime.UtcNow - updatedAt);
+                var size = FormatFileSize(fileSize);
+                var display = !string.IsNullOrEmpty(summary) ? summary : cwd;
+                int maxDisplay = Math.Max(10, w - 18);
+                if (display.Length > maxDisplay) display = display[..(maxDisplay - 3)] + "...";
+
+                var rowText = $"  {age,6} {size,6} {Markup.Escape(display)}";
+                int rowVis = VisibleWidth($"  {age,6} {size,6} {display}");
+                if (rowVis < w) rowText += new string(' ', w - rowVis);
+
+                bool isCursor = vi == cursorIdx;
+                if (isCursor)
+                {
+                    try { AnsiConsole.Markup($"[invert]{rowText}[/]"); }
+                    catch { Console.Write($"  {age,6} {size,6} {display}"); }
+                }
+                else
+                {
+                    try { AnsiConsole.Markup(rowText); }
+                    catch { Console.Write($"  {age,6} {size,6} {display}"); }
+                }
+            }
+            else
+            {
+                Console.Write(new string(' ', w));
+            }
+        }
+
+        // Status bar
+        AnsiConsole.Cursor.SetPosition(0, vh + 2);
+        string statusText;
+        if (inSearch)
+            statusText = $" Filter: {searchBuf}_";
+        else
+            statusText = " ↑↓ navigate | Enter open | / filter | q quit";
+        var escapedStatus = Markup.Escape(statusText);
+        int statusVis = VisibleWidth(statusText);
+        if (statusVis < w) escapedStatus += new string(' ', w - statusVis);
+        try { AnsiConsole.Markup($"[invert]{escapedStatus}[/]"); }
+        catch { Console.Write(statusText); }
+
+        Console.CursorVisible = inSearch;
+    }
+
+    Console.CursorVisible = false;
+    AnsiConsole.Clear();
+    RebuildFiltered();
+    Render();
 
     while (true)
     {
-        AnsiConsole.Clear();
-        AnsiConsole.MarkupLine($"[bold cyan]📋 Copilot CLI Sessions[/] [dim]({sessions.Count} total, page {page + 1}/{totalPages})[/]");
-        AnsiConsole.WriteLine();
-
-        int start = page * pageSize;
-        int end = Math.Min(start + pageSize, sessions.Count);
-        for (int i = start; i < end; i++)
+        if (!Console.KeyAvailable)
         {
-            var s = sessions[i];
-            var num = (i - start + 1).ToString().PadLeft(2);
-            var age = FormatAge(DateTime.UtcNow - s.updatedAt);
-            var size = FormatFileSize(s.fileSize);
-            var display = !string.IsNullOrEmpty(s.summary) ? s.summary : s.cwd;
-            if (display.Length > 70) display = display[..67] + "...";
-            
-            try
+            // Check if new sessions arrived
+            int count;
+            lock (sessionsLock) { count = allSessions.Count; }
+            if (count != lastRenderedCount)
             {
-                AnsiConsole.Markup($"  [bold yellow]{num}[/] ");
-                AnsiConsole.Markup($"[dim]{age,6}[/] ");
-                AnsiConsole.Markup($"[dim]{size,6}[/] ");
-                AnsiConsole.MarkupLine(Markup.Escape(display));
+                lastRenderedCount = count;
+                RebuildFiltered();
+                ClampCursor();
+                Render();
             }
-            catch
-            {
-                Console.WriteLine($"  {num} {age,6} {size,6} {display}");
-            }
+            Thread.Sleep(50);
+            continue;
         }
 
-        AnsiConsole.WriteLine();
-        if (totalPages > 1)
-            AnsiConsole.MarkupLine("[dim]Enter number to open | n/p next/prev page | q quit[/]");
-        else
-            AnsiConsole.MarkupLine("[dim]Enter number to open | q quit[/]");
-        AnsiConsole.Markup("[bold]> [/]");
+        var key = Console.ReadKey(true);
 
-        var input = Console.ReadLine()?.Trim();
-        if (string.IsNullOrEmpty(input) || input == "q") return null;
-        if (input == "n" && page < totalPages - 1) { page++; continue; }
-        if (input == "p" && page > 0) { page--; continue; }
-        if (int.TryParse(input, out int choice) && choice >= 1 && choice <= end - start)
+        if (inSearch)
         {
-            return sessions[start + choice - 1].eventsPath;
+            if (key.Key == ConsoleKey.Escape)
+            {
+                inSearch = false;
+                searchBuf.Clear();
+                searchFilter = "";
+                RebuildFiltered();
+                cursorIdx = 0;
+                scrollTop = 0;
+                Render();
+                continue;
+            }
+            if (key.Key == ConsoleKey.Enter)
+            {
+                inSearch = false;
+                searchFilter = searchBuf.ToString();
+                searchBuf.Clear();
+                RebuildFiltered();
+                cursorIdx = 0;
+                scrollTop = 0;
+                ClampCursor();
+                Render();
+                continue;
+            }
+            if (key.Key == ConsoleKey.Backspace)
+            {
+                if (searchBuf.Length > 0) searchBuf.Remove(searchBuf.Length - 1, 1);
+                searchFilter = searchBuf.ToString();
+                RebuildFiltered();
+                cursorIdx = 0;
+                scrollTop = 0;
+                ClampCursor();
+                Render();
+                continue;
+            }
+            if (!char.IsControl(key.KeyChar))
+            {
+                searchBuf.Append(key.KeyChar);
+                searchFilter = searchBuf.ToString();
+                RebuildFiltered();
+                cursorIdx = 0;
+                scrollTop = 0;
+                ClampCursor();
+                Render();
+                continue;
+            }
+            continue;
+        }
+
+        switch (key.Key)
+        {
+            case ConsoleKey.UpArrow:
+                cursorIdx = Math.Max(0, cursorIdx - 1);
+                ClampCursor();
+                Render();
+                break;
+            case ConsoleKey.DownArrow:
+                cursorIdx = Math.Min(filtered.Count - 1, cursorIdx + 1);
+                ClampCursor();
+                Render();
+                break;
+            case ConsoleKey.PageUp:
+                cursorIdx = Math.Max(0, cursorIdx - ViewHeight());
+                ClampCursor();
+                Render();
+                break;
+            case ConsoleKey.PageDown:
+                cursorIdx = Math.Min(filtered.Count - 1, cursorIdx + ViewHeight());
+                ClampCursor();
+                Render();
+                break;
+            case ConsoleKey.Home:
+                cursorIdx = 0;
+                ClampCursor();
+                Render();
+                break;
+            case ConsoleKey.End:
+                cursorIdx = Math.Max(0, filtered.Count - 1);
+                ClampCursor();
+                Render();
+                break;
+            case ConsoleKey.Enter:
+                if (filtered.Count > 0 && cursorIdx < filtered.Count)
+                {
+                    string path;
+                    lock (sessionsLock) { path = allSessions[filtered[cursorIdx]].eventsPath; }
+                    Console.CursorVisible = true;
+                    AnsiConsole.Clear();
+                    return path;
+                }
+                break;
+            case ConsoleKey.Escape:
+                if (searchFilter.Length > 0)
+                {
+                    searchFilter = "";
+                    RebuildFiltered();
+                    cursorIdx = 0;
+                    scrollTop = 0;
+                    ClampCursor();
+                    Render();
+                }
+                else
+                {
+                    Console.CursorVisible = true;
+                    AnsiConsole.Clear();
+                    return null;
+                }
+                break;
+            default:
+                switch (key.KeyChar)
+                {
+                    case 'k':
+                        cursorIdx = Math.Max(0, cursorIdx - 1);
+                        ClampCursor();
+                        Render();
+                        break;
+                    case 'j':
+                        cursorIdx = Math.Min(filtered.Count - 1, cursorIdx + 1);
+                        ClampCursor();
+                        Render();
+                        break;
+                    case '/':
+                        inSearch = true;
+                        searchBuf.Clear();
+                        Render();
+                        break;
+                    case 'q':
+                        Console.CursorVisible = true;
+                        AnsiConsole.Clear();
+                        return null;
+                    case 'g':
+                        cursorIdx = 0;
+                        ClampCursor();
+                        Render();
+                        break;
+                    case 'G':
+                        cursorIdx = Math.Max(0, filtered.Count - 1);
+                        ClampCursor();
+                        Render();
+                        break;
+                }
+                break;
         }
     }
 }

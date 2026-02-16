@@ -6,9 +6,17 @@ Interactive terminal viewer for Copilot CLI sessions and [waza](https://github.c
 
 
 
-## Install
+## Try it out
 
 Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
+
+```bash
+dnx dotnet-replay              # Browse your recent Copilot CLI sessions
+```
+
+No install needed — `dnx` downloads the tool to the NuGet cache, runs it, and cleans up.
+
+## Install
 
 ### Global tool (recommended)
 
@@ -27,15 +35,16 @@ dotnet tool install dotnet-replay
 
 With a local install, use `dotnet replay` instead.
 
-### Try without installing
+## Usage
+
+### Session Browser
 
 ```bash
-dnx dotnet-replay session.jsonl   # Runs ephemerally via .NET 10's dnx
+replay                      # Browse recent Copilot CLI sessions
+replay <session-id>         # Open a session by GUID
 ```
 
-No install needed — `dnx` downloads the tool to the NuGet cache, runs it, and cleans up. Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
-
-## Usage
+Run with no arguments to interactively browse your Copilot CLI sessions. Sessions are loaded asynchronously and can be filtered with `/`.
 
 ### Interactive Mode (Default)
 
