@@ -1901,13 +1901,44 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
                             Render();
                             break;
                         case 't':
+                            // Anchor scroll to content identity before rebuild
+                            string? anchorText = null;
+                            if (scrollOffset < contentLines.Count)
+                                anchorText = StripAnsi(contentLines[scrollOffset]);
                             currentExpandTools = !currentExpandTools;
                             RebuildContent();
+                            if (anchorText != null)
+                            {
+                                for (int si = 0; si < contentLines.Count; si++)
+                                {
+                                    if (StripAnsi(contentLines[si]) == anchorText)
+                                    {
+                                        scrollOffset = si;
+                                        break;
+                                    }
+                                }
+                            }
+                            ClampScroll();
                             Render();
                             break;
                         case 'f':
+                            string? fAnchor = null;
+                            if (scrollOffset < contentLines.Count)
+                                fAnchor = StripAnsi(contentLines[scrollOffset]);
                             filterIndex = (filterIndex + 1) % filterCycle.Length;
                             RebuildContent();
+                            if (fAnchor != null)
+                            {
+                                for (int si = 0; si < contentLines.Count; si++)
+                                {
+                                    if (StripAnsi(contentLines[si]) == fAnchor)
+                                    {
+                                        scrollOffset = si;
+                                        break;
+                                    }
+                                }
+                            }
+                            ClampScroll();
                             Render();
                             break;
                         case '/':
