@@ -1,7 +1,8 @@
 # dotnet-replay
 
 Interactive terminal viewer for Copilot CLI sessions and [waza](https://github.com/spboyer/waza) evaluation transcripts. Built as a single-file .NET 10 app
-
+[![Status](https://img.shields.io/badge/status-experimental-blueviolet)](#status)
+[![Platform](https://img.shields.io/badge/platform-GitHub%20Copilot-blue)](#how-it-works)
 <img width="2655" height="1555" alt="image" src="https://github.com/user-attachments/assets/5465fe1e-0647-4ccb-8fda-e17809790d80" />
 
 ## Try it out
