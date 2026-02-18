@@ -17,6 +17,7 @@ using System.Text.RegularExpressions;
 using Markdig;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
+using Markdig.Extensions.Tables;
 using Spectre.Console;
 
 Console.OutputEncoding = Encoding.UTF8;
@@ -267,6 +268,78 @@ void RenderBlock(Block block, List<string> lines, string colorName, string prefi
                 var quotePrefix = prefix + "▎ ";
                 RenderBlock(sub, lines, colorName, quotePrefix, depth);
             }
+            break;
+        }
+        case Markdig.Extensions.Tables.Table table:
+        {
+            // Collect all rows and their cell texts
+            var rows = new List<List<string>>();
+            foreach (var rowBlock in table)
+            {
+                if (rowBlock is Markdig.Extensions.Tables.TableRow row)
+                {
+                    var cells = new List<string>();
+                    foreach (var cellBlock in row)
+                    {
+                        if (cellBlock is Markdig.Extensions.Tables.TableCell cell)
+                        {
+                            var cellText = new StringBuilder();
+                            foreach (var sub in cell)
+                            {
+                                if (sub is ParagraphBlock p)
+                                    cellText.Append(RenderInlines(p.Inline));
+                            }
+                            cells.Add(cellText.ToString());
+                        }
+                    }
+                    if (cells.Count > 0)
+                        rows.Add(cells);
+                }
+            }
+            if (rows.Count > 0)
+            {
+                // Compute column widths
+                int colCount = rows.Max(r => r.Count);
+                var widths = new int[colCount];
+                foreach (var row in rows)
+                    for (int c = 0; c < row.Count; c++)
+                        widths[c] = Math.Max(widths[c], StripMarkup(row[c]).Length);
+
+                for (int r = 0; r < rows.Count; r++)
+                {
+                    var sb = new StringBuilder();
+                    for (int c = 0; c < colCount; c++)
+                    {
+                        if (c > 0) sb.Append(" | ");
+                        var cell = c < rows[r].Count ? rows[r][c] : "";
+                        var pad = widths[c] - StripMarkup(cell).Length;
+                        sb.Append(cell);
+                        if (pad > 0) sb.Append(new string(' ', pad));
+                    }
+                    var line = sb.ToString();
+                    if (noColor)
+                        lines.Add($"{prefix}{line}");
+                    else
+                        lines.Add($"[{colorName}]{prefix}{line}[/]");
+
+                    // Add separator after header row
+                    if (r == 0)
+                    {
+                        var sep = new StringBuilder();
+                        for (int c = 0; c < colCount; c++)
+                        {
+                            if (c > 0) sep.Append(" | ");
+                            sep.Append(new string('-', Math.Max(widths[c], 3)));
+                        }
+                        var sepLine = sep.ToString();
+                        if (noColor)
+                            lines.Add($"{prefix}{sepLine}");
+                        else
+                            lines.Add($"[{colorName} dim]{prefix}{sepLine}[/]");
+                    }
+                }
+            }
+            lines.Add(noColor ? prefix : $"[{colorName}]{prefix}[/]");
             break;
         }
         default:
@@ -2175,8 +2248,13 @@ string? BrowseSessions(string sessionStateDir)
             lock (sessionsLock)
             {
                 allSessions.Add((id, summary, cwd, updatedAt, eventsPath, fileSize));
-                allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+                if (allSessions.Count % 50 == 0)
+                    allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
             }
+        }
+        lock (sessionsLock)
+        {
+            allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
         }
         // Also scan Claude Code sessions
         var claudeProjectsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "projects");
@@ -2214,12 +2292,17 @@ string? BrowseSessions(string sessionStateDir)
                         lock (sessionsLock)
                         {
                             allSessions.Add((claudeId, claudeSummary, claudeCwd, claudeUpdatedAt, jsonlFile, fileSize));
-                            allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+                            if (allSessions.Count % 50 == 0)
+                                allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
                         }
                     }
                     catch { continue; }
                 }
             }
+        }
+        lock (sessionsLock)
+        {
+            allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
         }
         scanComplete = true;
     });
