@@ -1,6 +1,6 @@
 #:property ToolCommandName=replay
 #:property PackageId=dotnet-replay
-#:property Version=0.4.2
+#:property Version=0.4.3
 #:property Authors=Larry Ewing
 #:property Description=Interactive transcript viewer for Copilot CLI sessions and waza evaluations
 #:property PackageLicenseExpression=MIT
@@ -105,9 +105,31 @@ if (filePath is null)
     }
     filePath = BrowseSessions(sessionStateDir);
     if (filePath is null) return;
+    // Browser mode: loop between browser and pager
+    bool browsing = true;
+    while (browsing)
+    {
+        var action = OpenFile(filePath!);
+        switch (action)
+        {
+            case PagerAction.Browse:
+                filePath = BrowseSessions(sessionStateDir);
+                if (filePath is null) browsing = false;
+                break;
+            case PagerAction.Resume:
+                LaunchResume(filePath!);
+                browsing = false;
+                break;
+            default:
+                browsing = false;
+                break;
+        }
+    }
 }
-
-if (!File.Exists(filePath)) { Console.Error.WriteLine($"Error: File not found: {filePath}"); return; }
+else
+{
+    OpenFile(filePath);
+}
 
 // --- Color helpers (Spectre.Console markup) ---
 string Blue(string s) => noColor ? s : $"[blue]{Markup.Escape(s)}[/]";
@@ -722,77 +744,143 @@ string SafeGetString(JsonElement el, string prop)
     return "";
 }
 
-// --- Format detection ---
-var firstLine = "";
-using (var reader = new StreamReader(filePath))
+// --- OpenFile: format detection + pager, returns action ---
+PagerAction OpenFile(string path)
 {
-    firstLine = reader.ReadLine() ?? "";
-}
+    if (!File.Exists(path)) { Console.Error.WriteLine($"Error: File not found: {path}"); return PagerAction.Quit; }
 
-bool isJsonl = filePath.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase)
-    || (!filePath.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
-        && firstLine.TrimStart().StartsWith("{") && !firstLine.TrimStart().StartsWith("["));
-
-bool isClaude = false;
-if (isJsonl && IsClaudeFormat(filePath))
-    isClaude = true;
-
-bool isWaza = false;
-JsonDocument? wazaDoc = null;
-
-if (!isJsonl)
-{
-    try
+    var firstLine = "";
+    using (var reader = new StreamReader(path))
     {
-        var jsonText = File.ReadAllText(filePath);
-        wazaDoc = JsonDocument.Parse(jsonText);
-        var root = wazaDoc.RootElement;
-        if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("transcript", out _))
-            isWaza = true;
-        else if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("tasks", out var tasksCheck) && tasksCheck.ValueKind == JsonValueKind.Array)
-            isWaza = true;
-        else if (root.ValueKind == JsonValueKind.Array)
-            isWaza = true;
-        else
+        firstLine = reader.ReadLine() ?? "";
+    }
+
+    bool isJsonl = path.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase)
+        || (!path.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
+            && firstLine.TrimStart().StartsWith("{") && !firstLine.TrimStart().StartsWith("["));
+
+    bool isClaude = false;
+    if (isJsonl && IsClaudeFormat(path))
+        isClaude = true;
+
+    bool isWaza = false;
+    JsonDocument? wazaDoc = null;
+
+    if (!isJsonl)
+    {
+        try
         {
-            Console.Error.WriteLine("Error: Could not determine file format. Expected .jsonl (Copilot CLI) or JSON with 'transcript' field (Waza eval).");
-            return;
+            var jsonText = File.ReadAllText(path);
+            wazaDoc = JsonDocument.Parse(jsonText);
+            var root = wazaDoc.RootElement;
+            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("transcript", out _))
+                isWaza = true;
+            else if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("tasks", out var tasksCheck) && tasksCheck.ValueKind == JsonValueKind.Array)
+                isWaza = true;
+            else if (root.ValueKind == JsonValueKind.Array)
+                isWaza = true;
+            else
+            {
+                Console.Error.WriteLine("Error: Could not determine file format. Expected .jsonl (Copilot CLI) or JSON with 'transcript' field (Waza eval).");
+                return PagerAction.Quit;
+            }
+        }
+        catch (JsonException)
+        {
+            Console.Error.WriteLine("Error: Could not determine file format. File is not valid JSON or JSONL.");
+            return PagerAction.Quit;
         }
     }
-    catch (JsonException)
+
+    if (streamMode)
     {
-        Console.Error.WriteLine("Error: Could not determine file format. File is not valid JSON or JSONL.");
-        return;
+        // Stream mode: original dump-everything behavior
+        if (isJsonl && !isClaude) StreamEventsJsonl(path);
+        else if (isJsonl && isClaude) { var p = ParseClaudeData(path); if (p != null) { var cl = RenderJsonlContentLines(p, filterType, expandTools); foreach (var l in cl) Console.WriteLine(l); } }
+        else if (isWaza) StreamWazaTranscript(wazaDoc!);
+        return PagerAction.Quit;
+    }
+    else
+    {
+        // Interactive pager mode (default)
+        List<string> headerLines;
+        List<string> contentLines;
+        if (isJsonl)
+        {
+            var parsed = isClaude ? ParseClaudeData(path) : ParseJsonlData(path);
+            if (parsed is null) return PagerAction.Quit;
+            headerLines = RenderJsonlHeaderLines(parsed);
+            contentLines = RenderJsonlContentLines(parsed, filterType, expandTools);
+            return RunInteractivePager(headerLines, contentLines, parsed, isJsonlFormat: !isClaude, noFollow: isClaude || noFollow);
+        }
+        else if (isWaza)
+        {
+            var parsed = ParseWazaData(wazaDoc!);
+            headerLines = RenderWazaHeaderLines(parsed);
+            contentLines = RenderWazaContentLines(parsed, filterType, expandTools);
+            return RunInteractivePager(headerLines, contentLines, parsed, isJsonlFormat: false, noFollow: true);
+        }
+        return PagerAction.Quit;
     }
 }
 
-if (streamMode)
+// --- LaunchResume: detect session type and launch CLI ---
+void LaunchResume(string path)
 {
-    // Stream mode: original dump-everything behavior
-    if (isJsonl && !isClaude) StreamEventsJsonl(filePath);
-    else if (isJsonl && isClaude) { var p = ParseClaudeData(filePath); if (p != null) { var cl = RenderJsonlContentLines(p, filterType, expandTools); foreach (var l in cl) Console.WriteLine(l); } }
-    else if (isWaza) StreamWazaTranscript(wazaDoc!);
-}
-else
-{
-    // Interactive pager mode (default)
-    List<string> headerLines;
-    List<string> contentLines;
-    // We need the parsed data for re-rendering with different tool/filter settings
-    if (isJsonl)
+    // Determine if this is a Claude or Copilot session
+    bool isClaude = path.Contains(Path.Combine(".claude", "projects"));
+    string? sessionId = null;
+
+    if (isClaude)
     {
-        var parsed = isClaude ? ParseClaudeData(filePath) : ParseJsonlData(filePath);
-        if (parsed is null) return;
-        headerLines = RenderJsonlHeaderLines(parsed);
-        contentLines = RenderJsonlContentLines(parsed, filterType, expandTools);
-        RunInteractivePager(headerLines, contentLines, parsed, isJsonlFormat: !isClaude, noFollow: isClaude || noFollow);
+        // Claude sessions: the filename (without extension) is the session ID
+        sessionId = Path.GetFileNameWithoutExtension(path);
     }
-    else if (isWaza)
+    else
     {
-        var parsed = ParseWazaData(wazaDoc!);
-        headerLines = RenderWazaHeaderLines(parsed);
-        contentLines = RenderWazaContentLines(parsed, filterType, expandTools);
-        RunInteractivePager(headerLines, contentLines, parsed, isJsonlFormat: false, noFollow: true);
+        // Copilot sessions: the directory name is the session ID
+        sessionId = Path.GetFileName(Path.GetDirectoryName(path));
+    }
+
+    if (string.IsNullOrEmpty(sessionId))
+    {
+        Console.Error.WriteLine("Error: Could not determine session ID for resume.");
+        return;
+    }
+
+    Console.CursorVisible = true;
+    AnsiConsole.Clear();
+
+    string command, args;
+    if (isClaude)
+    {
+        command = "claude";
+        args = $"--resume \"{sessionId}\"";
+    }
+    else
+    {
+        command = "gh";
+        args = $"copilot --resume \"{sessionId}\"";
+    }
+
+    Console.WriteLine($"Resuming session with: {command} {args}");
+    Console.WriteLine();
+
+    try
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = command,
+            Arguments = args,
+            UseShellExecute = false
+        };
+        var proc = System.Diagnostics.Process.Start(psi);
+        proc?.WaitForExit();
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Error launching {command}: {ex.Message}");
+        Console.Error.WriteLine($"Make sure '{command}' is installed and available in your PATH.");
     }
 }
 
@@ -1562,7 +1650,7 @@ List<string> RenderWazaContentLines(WazaData d, string? filter, bool expandTool)
 }
 
 // ========== Interactive Pager ==========
-void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines, T parsedData, bool isJsonlFormat, bool noFollow)
+PagerAction RunInteractivePager<T>(List<string> headerLines, List<string> contentLines, T parsedData, bool isJsonlFormat, bool noFollow)
 {
     int scrollOffset = 0;
     int scrollX = 0;
@@ -1809,7 +1897,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
         {
             var followIndicator = following ? (userAtBottom ? " LIVE" : " [new content ↓]") : "";
             var colIndicator = scrollX > 0 ? $" Col {scrollX}+" : "";
-            statusText = $" Line {currentLine}/{contentLines.Count}{colIndicator} | Filter: {statusFilter}{followIndicator} | t tools/thinking | / search | q quit";
+            statusText = $" Line {currentLine}/{contentLines.Count}{colIndicator} | Filter: {statusFilter}{followIndicator} | t tools | b browse | r resume | q quit";
         }
         var escapedStatus = Markup.Escape(statusText);
         int statusVisLen = VisibleWidth(statusText);
@@ -1994,7 +2082,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
             {
                 case ConsoleKey.Q:
                 case ConsoleKey.Escape:
-                    return;
+                    return PagerAction.Quit;
 
                 case ConsoleKey.UpArrow:
                     scrollOffset = Math.Max(0, scrollOffset - 1);
@@ -2127,6 +2215,10 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
                                 Render();
                             }
                             break;
+                        case 'b':
+                            return PagerAction.Browse;
+                        case 'r':
+                            return PagerAction.Resume;
                     }
                     break;
             }
@@ -2138,6 +2230,7 @@ void RunInteractivePager<T>(List<string> headerLines, List<string> contentLines,
         Console.CursorVisible = true;
         AnsiConsole.Clear();
     }
+    return PagerAction.Quit;
 }
 
 // ========== Stream Mode (original dump behavior) ==========
@@ -2514,7 +2607,7 @@ string? BrowseSessions(string sessionStateDir)
         else
         {
             var previewHint = showPreview ? "i close preview" : "i preview";
-            statusText = $" ↑↓ navigate | Enter open | / filter | {previewHint} | q quit";
+            statusText = $" ↑↓ navigate | Enter open | r resume | / filter | {previewHint} | q quit";
         }
         var escapedStatus = Markup.Escape(statusText);
         int statusVis = VisibleWidth(statusText);
@@ -2718,6 +2811,17 @@ string? BrowseSessions(string sessionStateDir)
                             Render();
                         }
                         break;
+                    case 'r':
+                        if (filtered.Count > 0 && cursorIdx >= 0 && cursorIdx < filtered.Count)
+                        {
+                            string rPath;
+                            lock (sessionsLock) { rPath = allSessions[filtered[cursorIdx]].eventsPath; }
+                            Console.CursorVisible = true;
+                            AnsiConsole.Clear();
+                            LaunchResume(rPath);
+                            return null;
+                        }
+                        break;
                 }
                 break;
         }
@@ -2772,6 +2876,8 @@ void PrintHelp()
       i                    Toggle full session info overlay
       /                    Search (Enter to execute, Esc to cancel)
       n/N                  Next/previous search match
+      b                    Back to session browser
+      r                    Resume session (launches copilot or claude CLI)
       q/Escape             Quit
 
     JSONL files auto-follow by default (like tail -f). Use --no-follow to disable.
@@ -2795,3 +2901,5 @@ record WazaData(
     double DurationMs, int TotalTurns, int ToolCallCount, int TokensIn, int TokensOut,
     List<(string name, double score, bool passed, string feedback)> Validations,
     string ModelId = "", double AggregateScore = 0, string[] ToolsUsed = null!);
+
+enum PagerAction { Quit, Browse, Resume }
