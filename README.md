@@ -95,6 +95,8 @@ replay <file> | less        # Auto-switches to stream mode when piped
 | **/** | Enter search mode |
 | **n** | Jump to next search match |
 | **N** | Jump to previous search match |
+| **r** | Resume session (launches `copilot --resume` or `claude --resume`) |
+| **b** | Browse sessions (return to session browser) |
 | **q** or **Esc** | Quit |
 
 ## Examples
