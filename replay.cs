@@ -1,6 +1,6 @@
 #:property ToolCommandName=replay
 #:property PackageId=dotnet-replay
-#:property Version=0.4.3
+#:property Version=0.4.4
 #:property Authors=Larry Ewing
 #:property Description=Interactive transcript viewer for Copilot CLI sessions and waza evaluations
 #:property PackageLicenseExpression=MIT
@@ -859,8 +859,8 @@ void LaunchResume(string path)
     }
     else
     {
-        command = "gh";
-        args = $"copilot --resume \"{sessionId}\"";
+        command = "copilot";
+        args = $"--resume \"{sessionId}\"";
     }
 
     Console.WriteLine($"Resuming session with: {command} {args}");
