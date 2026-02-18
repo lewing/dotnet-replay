@@ -1166,7 +1166,7 @@ WazaData ParseWazaData(JsonDocument doc)
 string BuildJsonlInfoBar(JsonlData d)
 {
     List<string> parts = [];
-    if (d.SessionId != "") parts.Add($"session {d.SessionId[..Math.Min(d.SessionId.Length, 8)]}");
+    if (d.SessionId != "") parts.Add($"session {d.SessionId}");
     if (d.CopilotVersion != "") parts.Add(d.CopilotVersion);
     parts.Add($"{d.EventCount} events");
     return $"[{string.Join(" | ", parts)}]";
@@ -2410,17 +2410,21 @@ string? BrowseSessions(string sessionStateDir)
             lock (sessionsLock)
             {
                 var cs = allSessions[filtered[cursorIdx]];
-                var shortId = cs.id.Length >= 8 ? cs.id[..8] : cs.id;
                 var updated = cs.updatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
-                cursorInfo = $" | {shortId} {updated}";
+                cursorInfo = $" | {cs.id} {updated}";
             }
         }
-        var headerText = $" 📋 Sessions — {count} sessions{loadingStatus}{filterStatus}{cursorInfo}";
-        var escapedHeader = Markup.Escape(headerText);
+        var headerBase = $" 📋 Sessions — {count} sessions{loadingStatus}{filterStatus}";
+        var headerText = headerBase + cursorInfo;
         int headerVis = VisibleWidth(headerText);
-        if (headerVis < w) escapedHeader += new string(' ', w - headerVis);
-        try { AnsiConsole.Markup($"[bold invert]{escapedHeader}[/]"); }
-        catch { Console.Write(headerText); }
+        var hdrPad = headerVis < w ? new string(' ', w - headerVis) : "";
+        try
+        {
+            var escapedBase = Markup.Escape(headerBase);
+            var escapedCursor = Markup.Escape(cursorInfo);
+            AnsiConsole.Markup($"[bold invert]{escapedBase}[/][bold underline invert]{escapedCursor}[/][bold invert]{hdrPad}[/]");
+        }
+        catch { Console.Write(headerText + hdrPad); }
 
         // Content rows
         for (int vi = scrollTop; vi < scrollTop + vh; vi++)
