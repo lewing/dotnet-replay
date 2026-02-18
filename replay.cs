@@ -2526,16 +2526,19 @@ string? BrowseSessions(string sessionStateDir)
     RebuildFiltered();
     Render();
 
+    DateTime lastBrowserRender = DateTime.MinValue;
     while (true)
     {
         if (!Console.KeyAvailable)
         {
-            // Check if new sessions arrived
+            // Check if new sessions arrived — throttle re-renders to max 4/sec
             int count;
             lock (sessionsLock) { count = allSessions.Count; }
-            if (count != lastRenderedCount)
+            var now = DateTime.UtcNow;
+            if (count != lastRenderedCount && (now - lastBrowserRender).TotalMilliseconds >= 250)
             {
                 lastRenderedCount = count;
+                lastBrowserRender = now;
                 RebuildFiltered();
                 ClampCursor();
                 Render();
