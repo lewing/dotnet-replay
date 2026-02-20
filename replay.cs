@@ -22,6 +22,14 @@ using Spectre.Console;
 
 Console.OutputEncoding = Encoding.UTF8;
 var markdownPipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
+var JsonlSerializerOptions = new JsonSerializerOptions
+{
+    DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+};
+var SummarySerializerOptions = new JsonSerializerOptions
+{
+    WriteIndented = true
+};
 
 // --- CLI argument parsing ---
 var cliArgs = Environment.GetCommandLineArgs().Skip(1).ToArray();
@@ -33,6 +41,8 @@ string? filterType = null;
 bool noColor = false;
 bool streamMode = false;
 bool noFollow = false;
+bool jsonMode = false;
+bool summaryMode = false;
 
 for (int i = 0; i < cliArgs.Length; i++)
 {
@@ -65,6 +75,12 @@ for (int i = 0; i < cliArgs.Length; i++)
         case "--no-follow":
             noFollow = true;
             break;
+        case "--json":
+            jsonMode = true;
+            break;
+        case "--summary":
+            summaryMode = true;
+            break;
         default:
             if (cliArgs[i].StartsWith("-")) { Console.Error.WriteLine($"Unknown option: {cliArgs[i]}"); PrintHelp(); return; }
             filePath = cliArgs[i];
@@ -77,6 +93,13 @@ if (Console.IsOutputRedirected)
 {
     streamMode = true;
     noColor = true; // Markup can't render to redirected output
+}
+
+// JSON mode implies stream mode
+if (jsonMode || summaryMode)
+{
+    streamMode = true;
+    noColor = true;
 }
 
 // Resolve session ID or browse sessions if no file given
@@ -794,10 +817,44 @@ PagerAction OpenFile(string path)
 
     if (streamMode)
     {
-        // Stream mode: original dump-everything behavior
-        if (isJsonl && !isClaude) StreamEventsJsonl(path);
-        else if (isJsonl && isClaude) { var p = ParseClaudeData(path); if (p != null) { var cl = RenderJsonlContentLines(p, filterType, expandTools); foreach (var l in cl) Console.WriteLine(l); } }
-        else if (isWaza) StreamWazaTranscript(wazaDoc!);
+        // Stream mode: original dump-everything behavior OR json/summary output
+        if (summaryMode)
+        {
+            // Summary mode: high-level session stats
+            if (isJsonl)
+            {
+                var parsed = isClaude ? ParseClaudeData(path) : ParseJsonlData(path);
+                if (parsed is not null)
+                    OutputSummary(parsed, jsonMode);
+            }
+            else if (isWaza)
+            {
+                var parsed = ParseWazaData(wazaDoc!);
+                OutputWazaSummary(parsed, jsonMode);
+            }
+        }
+        else if (jsonMode)
+        {
+            // JSON mode: structured JSONL output
+            if (isJsonl)
+            {
+                var parsed = isClaude ? ParseClaudeData(path) : ParseJsonlData(path);
+                if (parsed is not null)
+                    OutputJsonl(parsed, filterType, expandTools);
+            }
+            else if (isWaza)
+            {
+                var parsed = ParseWazaData(wazaDoc!);
+                OutputWazaJsonl(parsed, filterType, expandTools);
+            }
+        }
+        else
+        {
+            // Standard stream mode
+            if (isJsonl && !isClaude) StreamEventsJsonl(path);
+            else if (isJsonl && isClaude) { var p = ParseClaudeData(path); if (p != null) { var cl = RenderJsonlContentLines(p, filterType, expandTools); foreach (var l in cl) Console.WriteLine(l); } }
+            else if (isWaza) StreamWazaTranscript(wazaDoc!);
+        }
         return PagerAction.Quit;
     }
     else
@@ -2843,6 +2900,272 @@ string FormatFileSize(long bytes)
     if (bytes < 1024 * 1024) return $"{bytes / 1024}KB";
     return $"{bytes / (1024 * 1024.0):F1}MB";
 }
+
+// ========== JSON and Summary Output Modes ==========
+
+void OutputJsonl(JsonlData d, string? filter, bool expandTool)
+{
+    var filtered = d.Turns.AsEnumerable();
+    if (filter is not null)
+    {
+        filtered = filtered.Where(t => filter switch
+        {
+            "user" => t.type == "user.message",
+            "assistant" => t.type is "assistant.message" or "assistant.thinking",
+            "tool" => t.type is "tool.execution_start" or "tool.result",
+            "error" => t.type == "tool.result" && t.root.TryGetProperty("data", out var dd)
+                       && dd.TryGetProperty("result", out var r) && SafeGetString(r, "status") == "error",
+            _ => true
+        });
+    }
+    
+    int turnIndex = 0;
+    var turnList = filtered.ToList();
+    
+    foreach (var (type, root, ts) in turnList)
+    {
+        var data = root.TryGetProperty("data", out var d2) ? d2 : default;
+        
+        switch (type)
+        {
+            case "user.message":
+            {
+                var content = SafeGetString(data, "content");
+                var json = new TurnOutput(turnIndex, "user", ts?.ToString("o"), content, content.Length);
+                Console.WriteLine(JsonSerializer.Serialize(json, JsonlSerializerOptions));
+                turnIndex++;
+                break;
+            }
+            case "assistant.message":
+            {
+                var content = SafeGetString(data, "content");
+                var toolCallNames = new List<string>();
+                if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("toolRequests", out var toolReqs)
+                    && toolReqs.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var tr in toolReqs.EnumerateArray())
+                    {
+                        if (tr.TryGetProperty("name", out var nameEl) && nameEl.ValueKind == JsonValueKind.String)
+                            toolCallNames.Add(nameEl.GetString() ?? "");
+                    }
+                }
+                
+                var json = new TurnOutput(turnIndex, "assistant", ts?.ToString("o"), content, content.Length,
+                    tool_calls: toolCallNames.Count > 0 ? toolCallNames.ToArray() : null);
+                Console.WriteLine(JsonSerializer.Serialize(json, JsonlSerializerOptions));
+                turnIndex++;
+                break;
+            }
+            case "tool.execution_start":
+            {
+                var toolName = SafeGetString(data, "name");
+                var args = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("args", out var a) ? a : default;
+                
+                var json = new TurnOutput(turnIndex, "tool", ts?.ToString("o"),
+                    tool_name: toolName, status: "start",
+                    args: expandTool && args.ValueKind != JsonValueKind.Undefined ? JsonSerializer.Serialize(args) : null);
+                Console.WriteLine(JsonSerializer.Serialize(json, JsonlSerializerOptions));
+                break;
+            }
+            case "tool.result":
+            {
+                if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("result", out var res))
+                {
+                    var toolName = SafeGetString(data, "name");
+                    var resultStatus = SafeGetString(res, "status");
+                    var output = SafeGetString(res, "output");
+                    
+                    var json = new TurnOutput(turnIndex, "tool", ts?.ToString("o"),
+                        tool_name: toolName, status: "complete",
+                        result_status: expandTool ? resultStatus : null,
+                        result_length: output.Length,
+                        result: expandTool ? (full ? output : (output.Length > 500 ? output[..500] + "..." : output)) : null);
+                    Console.WriteLine(JsonSerializer.Serialize(json, JsonlSerializerOptions));
+                }
+                break;
+            }
+        }
+    }
+}
+
+void OutputWazaJsonl(WazaData d, string? filter, bool expandTool)
+{
+    // For waza, output a simplified JSON representation of transcript items
+    int turnIndex = 0;
+    foreach (var item in d.TranscriptItems)
+    {
+        if (item.TryGetProperty("role", out var roleEl) && roleEl.ValueKind == JsonValueKind.String)
+        {
+            var role = roleEl.GetString();
+            var content = item.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : "";
+            
+            if (filter is not null)
+            {
+                bool matches = filter switch
+                {
+                    "user" => role == "user",
+                    "assistant" => role == "assistant",
+                    "tool" => false, // Waza doesn't have separate tool events
+                    _ => true
+                };
+                if (!matches) continue;
+            }
+            
+            var json = new TurnOutput(turnIndex, role!, content: content, content_length: content?.Length ?? 0);
+            Console.WriteLine(JsonSerializer.Serialize(json, JsonlSerializerOptions));
+            turnIndex++;
+        }
+    }
+}
+
+void OutputSummary(JsonlData d, bool asJson)
+{
+    // Calculate statistics
+    int userMsgCount = 0, assistantMsgCount = 0, toolCallCount = 0, errorCount = 0;
+    var toolUsage = new Dictionary<string, int>();
+    var skillsInvoked = new HashSet<string>();
+    
+    foreach (var (type, root, ts) in d.Turns)
+    {
+        var data = root.TryGetProperty("data", out var d2) ? d2 : default;
+        
+        switch (type)
+        {
+            case "user.message":
+                userMsgCount++;
+                break;
+            case "assistant.message":
+                assistantMsgCount++;
+                if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("toolRequests", out var toolReqs)
+                    && toolReqs.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var tr in toolReqs.EnumerateArray())
+                    {
+                        toolCallCount++;
+                        if (tr.TryGetProperty("name", out var nameEl) && nameEl.ValueKind == JsonValueKind.String)
+                        {
+                            var toolName = nameEl.GetString() ?? "";
+                            toolUsage[toolName] = toolUsage.GetValueOrDefault(toolName) + 1;
+                            
+                            // Detect skill invocations
+                            if (toolName == "skill" && tr.TryGetProperty("args", out var args) 
+                                && args.TryGetProperty("skill", out var skillNameEl))
+                            {
+                                skillsInvoked.Add(skillNameEl.GetString() ?? "");
+                            }
+                        }
+                    }
+                }
+                break;
+            case "tool.result":
+                if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("result", out var res))
+                {
+                    var status = SafeGetString(res, "status");
+                    if (status == "error") errorCount++;
+                }
+                break;
+        }
+    }
+    
+    // Detect agent name from events
+    string agentName = "";
+    foreach (var ev in d.Events)
+    {
+        var root = ev.RootElement;
+        if (root.TryGetProperty("type", out var typeEl) && typeEl.GetString() == "session.start")
+        {
+            if (root.TryGetProperty("data", out var data) && data.TryGetProperty("context", out var ctx))
+            {
+                agentName = SafeGetString(ctx, "agentName");
+                break;
+            }
+        }
+    }
+    
+    var duration = d.EndTime.HasValue && d.StartTime.HasValue 
+        ? d.EndTime.Value - d.StartTime.Value 
+        : TimeSpan.Zero;
+    
+    if (asJson)
+    {
+        var json = new SessionSummary(
+            session_id: d.SessionId,
+            duration_seconds: (int)duration.TotalSeconds,
+            duration_formatted: FormatDuration(duration),
+            start_time: d.StartTime?.ToString("o"),
+            end_time: d.EndTime?.ToString("o"),
+            turns: new TurnCounts(userMsgCount, assistantMsgCount, toolCallCount),
+            skills_invoked: skillsInvoked.OrderBy(s => s).ToArray(),
+            tools_used: toolUsage.OrderByDescending(kv => kv.Value).ToDictionary(kv => kv.Key, kv => kv.Value),
+            agent: agentName,
+            errors: errorCount,
+            last_activity: d.EndTime?.ToString("o"));
+        Console.WriteLine(JsonSerializer.Serialize(json, SummarySerializerOptions));
+    }
+    else
+    {
+        Console.WriteLine($"Session: {d.SessionId}");
+        Console.WriteLine($"Duration: {FormatDuration(duration)} ({d.StartTime?.ToString("HH:mm:ss")} - {d.EndTime?.ToString("HH:mm:ss")} UTC)");
+        Console.WriteLine($"Turns: {userMsgCount} user, {assistantMsgCount} assistant, {toolCallCount} tool calls");
+        if (skillsInvoked.Count > 0)
+            Console.WriteLine($"Skills invoked: {string.Join(", ", skillsInvoked.OrderBy(s => s))}");
+        if (toolUsage.Count > 0)
+        {
+            var topTools = toolUsage.OrderByDescending(kv => kv.Value).Take(10);
+            Console.WriteLine($"Tools used: {string.Join(", ", topTools.Select(kv => $"{kv.Key} ({kv.Value})"))}");
+        }
+        if (!string.IsNullOrEmpty(agentName))
+            Console.WriteLine($"Agent: {agentName}");
+        if (errorCount > 0)
+            Console.WriteLine($"Errors: {errorCount} tool failures");
+        Console.WriteLine($"Last activity: {d.EndTime?.ToString("yyyy-MM-dd HH:mm:ss")} UTC");
+    }
+}
+
+void OutputWazaSummary(WazaData d, bool asJson)
+{
+    if (asJson)
+    {
+        var json = new WazaSummary(
+            task_name: d.TaskName,
+            task_id: d.TaskId,
+            status: d.Status,
+            duration_ms: d.DurationMs,
+            duration_formatted: FormatDuration(TimeSpan.FromMilliseconds(d.DurationMs)),
+            total_turns: d.TotalTurns,
+            tool_calls: d.ToolCallCount,
+            tokens: new TokenCounts(d.TokensIn, d.TokensOut, d.TokensIn + d.TokensOut),
+            model: d.ModelId,
+            aggregate_score: d.AggregateScore,
+            validations: d.Validations.Select(v => new ValidationOutput(v.name, v.score, v.passed, v.feedback)).ToArray());
+        Console.WriteLine(JsonSerializer.Serialize(json, SummarySerializerOptions));
+    }
+    else
+    {
+        Console.WriteLine($"Task: {d.TaskName} ({d.TaskId})");
+        Console.WriteLine($"Status: {d.Status}");
+        Console.WriteLine($"Duration: {FormatDuration(TimeSpan.FromMilliseconds(d.DurationMs))}");
+        Console.WriteLine($"Turns: {d.TotalTurns}, Tool calls: {d.ToolCallCount}");
+        Console.WriteLine($"Tokens: {d.TokensIn} in, {d.TokensOut} out ({d.TokensIn + d.TokensOut} total)");
+        Console.WriteLine($"Model: {d.ModelId}");
+        Console.WriteLine($"Score: {d.AggregateScore:F2}");
+        if (d.Validations.Count > 0)
+        {
+            Console.WriteLine("Validations:");
+            foreach (var v in d.Validations)
+                Console.WriteLine($"  {v.name}: {(v.passed ? "✓" : "✗")} ({v.score:F2})");
+        }
+    }
+}
+
+string FormatDuration(TimeSpan ts)
+{
+    if (ts.TotalSeconds < 60)
+        return $"{(int)ts.TotalSeconds}s";
+    if (ts.TotalMinutes < 60)
+        return $"{(int)ts.TotalMinutes}m {ts.Seconds}s";
+    return $"{(int)ts.TotalHours}h {ts.Minutes}m";
+}
 
 void PrintHelp()
 {
@@ -2862,7 +3185,15 @@ void PrintHelp()
       --no-color          Disable ANSI colors
       --stream            Use streaming output (non-interactive, original behavior)
       --no-follow         Disable auto-follow for JSONL files
+      --json              Output as structured JSONL (one JSON object per line)
+      --summary           Show high-level session statistics instead of full transcript
       --help              Show this help
+
+    Output Modes:
+      --json              Emit JSONL format (composable with --filter, --tail, --expand-tools)
+                          Each turn outputs: {"turn": N, "role": "user|assistant|tool", ...}
+      --summary           Show session overview: duration, turn counts, tools used, errors
+      --summary --json    Combine for machine-readable summary in JSON format
 
     Interactive mode (default):
       ↑/k ↓/j             Scroll up/down one line
@@ -2903,3 +3234,48 @@ record WazaData(
     string ModelId = "", double AggregateScore = 0, string[] ToolsUsed = null!);
 
 enum PagerAction { Quit, Browse, Resume }
+
+// ========== JSON output records and serializer options ==========
+record TurnOutput(
+    int turn,
+    string role,
+    string? timestamp = null,
+    string? content = null,
+    int? content_length = null,
+    string[]? tool_calls = null,
+    string? tool_name = null,
+    string? status = null,
+    string? args = null,
+    string? result_status = null,
+    int? result_length = null,
+    string? result = null);
+
+record TurnCounts(int user, int assistant, int tool_calls);
+record TokenCounts(int input, int output, int total);
+record ValidationOutput(string name, double score, bool passed, string feedback);
+
+record SessionSummary(
+    string session_id,
+    int duration_seconds,
+    string duration_formatted,
+    string? start_time,
+    string? end_time,
+    TurnCounts turns,
+    string[] skills_invoked,
+    Dictionary<string, int> tools_used,
+    string agent,
+    int errors,
+    string? last_activity);
+
+record WazaSummary(
+    string task_name,
+    string task_id,
+    string status,
+    double duration_ms,
+    string duration_formatted,
+    int total_turns,
+    int tool_calls,
+    TokenCounts tokens,
+    string model,
+    double aggregate_score,
+    ValidationOutput[] validations);

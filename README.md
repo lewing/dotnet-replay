@@ -68,6 +68,27 @@ replay <file> --stream      # Output entire transcript and exit
 replay <file> | less        # Auto-switches to stream mode when piped
 ```
 
+### JSON and Summary Modes
+
+```bash
+replay <file> --json                    # Output as structured JSONL
+replay <file> --json --filter user      # JSON output of user messages only
+replay <file> --json --tail 5           # JSON output of last 5 turns
+replay <file> --json --expand-tools     # Include tool args/results in JSON
+
+replay <file> --summary                 # Show high-level session statistics
+replay <file> --summary --json          # Summary as machine-readable JSON
+```
+
+**JSON output format** — One JSON object per line:
+```json
+{"turn": 0, "role": "user", "timestamp": "2026-02-20T02:07:54Z", "content": "...", "content_length": 1234}
+{"turn": 0, "role": "assistant", "timestamp": "2026-02-20T02:08:12Z", "content": "...", "content_length": 5678, "tool_calls": ["skill", "view"]}
+{"turn": 0, "role": "tool", "tool_name": "view", "status": "complete", "result_length": 2048}
+```
+
+**Summary output** shows session overview: duration, turn counts, tools used, skills invoked, and errors.
+
 ## Supported Formats
 
 - **Copilot CLI events** (`.jsonl`) — Session transcripts from GitHub Copilot CLI

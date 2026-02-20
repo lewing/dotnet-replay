@@ -32,3 +32,4 @@ nupkg/
 .idea/
 *.sln.iml
 artifacts/
+out/
