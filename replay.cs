@@ -22,6 +22,14 @@ using Spectre.Console;
 
 Console.OutputEncoding = Encoding.UTF8;
 var markdownPipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
+var JsonlSerializerOptions = new JsonSerializerOptions
+{
+    DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+};
+var SummarySerializerOptions = new JsonSerializerOptions
+{
+    WriteIndented = true
+};
 
 // --- CLI argument parsing ---
 var cliArgs = Environment.GetCommandLineArgs().Skip(1).ToArray();
@@ -2923,15 +2931,8 @@ void OutputJsonl(JsonlData d, string? filter, bool expandTool)
             case "user.message":
             {
                 var content = SafeGetString(data, "content");
-                var json = new
-                {
-                    turn = turnIndex,
-                    role = "user",
-                    timestamp = ts?.ToString("o"),
-                    content,
-                    content_length = content.Length
-                };
-                Console.WriteLine(JsonSerializer.Serialize(json));
+                var json = new TurnOutput(turnIndex, "user", ts?.ToString("o"), content, content.Length);
+                Console.WriteLine(JsonSerializer.Serialize(json, JsonlSerializerOptions));
                 turnIndex++;
                 break;
             }
@@ -2949,16 +2950,9 @@ void OutputJsonl(JsonlData d, string? filter, bool expandTool)
                     }
                 }
                 
-                var json = new
-                {
-                    turn = turnIndex,
-                    role = "assistant",
-                    timestamp = ts?.ToString("o"),
-                    content,
-                    content_length = content.Length,
-                    tool_calls = toolCallNames.Count > 0 ? toolCallNames.ToArray() : null
-                };
-                Console.WriteLine(JsonSerializer.Serialize(json));
+                var json = new TurnOutput(turnIndex, "assistant", ts?.ToString("o"), content, content.Length,
+                    tool_calls: toolCallNames.Count > 0 ? toolCallNames.ToArray() : null);
+                Console.WriteLine(JsonSerializer.Serialize(json, JsonlSerializerOptions));
                 turnIndex++;
                 break;
             }
@@ -2967,31 +2961,10 @@ void OutputJsonl(JsonlData d, string? filter, bool expandTool)
                 var toolName = SafeGetString(data, "name");
                 var args = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("args", out var a) ? a : default;
                 
-                if (expandTool && args.ValueKind != JsonValueKind.Undefined)
-                {
-                    var json = new
-                    {
-                        turn = turnIndex,
-                        role = "tool",
-                        tool_name = toolName,
-                        timestamp = ts?.ToString("o"),
-                        status = "start",
-                        args = JsonSerializer.Serialize(args)
-                    };
-                    Console.WriteLine(JsonSerializer.Serialize(json));
-                }
-                else
-                {
-                    var json = new
-                    {
-                        turn = turnIndex,
-                        role = "tool",
-                        tool_name = toolName,
-                        timestamp = ts?.ToString("o"),
-                        status = "start"
-                    };
-                    Console.WriteLine(JsonSerializer.Serialize(json));
-                }
+                var json = new TurnOutput(turnIndex, "tool", ts?.ToString("o"),
+                    tool_name: toolName, status: "start",
+                    args: expandTool && args.ValueKind != JsonValueKind.Undefined ? JsonSerializer.Serialize(args) : null);
+                Console.WriteLine(JsonSerializer.Serialize(json, JsonlSerializerOptions));
                 break;
             }
             case "tool.result":
@@ -2999,37 +2972,15 @@ void OutputJsonl(JsonlData d, string? filter, bool expandTool)
                 if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("result", out var res))
                 {
                     var toolName = SafeGetString(data, "name");
-                    var status = SafeGetString(res, "status");
+                    var resultStatus = SafeGetString(res, "status");
                     var output = SafeGetString(res, "output");
                     
-                    if (expandTool)
-                    {
-                        var json = new
-                        {
-                            turn = turnIndex,
-                            role = "tool",
-                            tool_name = toolName,
-                            timestamp = ts?.ToString("o"),
-                            status = "complete",
-                            result_status = status,
-                            result_length = output.Length,
-                            result = full ? output : (output.Length > 500 ? output[..500] + "..." : output)
-                        };
-                        Console.WriteLine(JsonSerializer.Serialize(json));
-                    }
-                    else
-                    {
-                        var json = new
-                        {
-                            turn = turnIndex,
-                            role = "tool",
-                            tool_name = toolName,
-                            timestamp = ts?.ToString("o"),
-                            status = "complete",
-                            result_length = output.Length
-                        };
-                        Console.WriteLine(JsonSerializer.Serialize(json));
-                    }
+                    var json = new TurnOutput(turnIndex, "tool", ts?.ToString("o"),
+                        tool_name: toolName, status: "complete",
+                        result_status: expandTool ? resultStatus : null,
+                        result_length: output.Length,
+                        result: expandTool ? (full ? output : (output.Length > 500 ? output[..500] + "..." : output)) : null);
+                    Console.WriteLine(JsonSerializer.Serialize(json, JsonlSerializerOptions));
                 }
                 break;
             }
@@ -3060,14 +3011,8 @@ void OutputWazaJsonl(WazaData d, string? filter, bool expandTool)
                 if (!matches) continue;
             }
             
-            var json = new
-            {
-                turn = turnIndex,
-                role,
-                content,
-                content_length = content?.Length ?? 0
-            };
-            Console.WriteLine(JsonSerializer.Serialize(json));
+            var json = new TurnOutput(turnIndex, role!, content: content, content_length: content?.Length ?? 0);
+            Console.WriteLine(JsonSerializer.Serialize(json, JsonlSerializerOptions));
             turnIndex++;
         }
     }
@@ -3143,21 +3088,19 @@ void OutputSummary(JsonlData d, bool asJson)
     
     if (asJson)
     {
-        var json = new
-        {
-            session_id = d.SessionId,
-            duration_seconds = (int)duration.TotalSeconds,
-            duration_formatted = FormatDuration(duration),
-            start_time = d.StartTime?.ToString("o"),
-            end_time = d.EndTime?.ToString("o"),
-            turns = new { user = userMsgCount, assistant = assistantMsgCount, tool_calls = toolCallCount },
-            skills_invoked = skillsInvoked.OrderBy(s => s).ToArray(),
-            tools_used = toolUsage.OrderByDescending(kv => kv.Value).ToDictionary(kv => kv.Key, kv => kv.Value),
-            agent = agentName,
-            errors = errorCount,
-            last_activity = d.EndTime?.ToString("o")
-        };
-        Console.WriteLine(JsonSerializer.Serialize(json, new JsonSerializerOptions { WriteIndented = true }));
+        var json = new SessionSummary(
+            session_id: d.SessionId,
+            duration_seconds: (int)duration.TotalSeconds,
+            duration_formatted: FormatDuration(duration),
+            start_time: d.StartTime?.ToString("o"),
+            end_time: d.EndTime?.ToString("o"),
+            turns: new TurnCounts(userMsgCount, assistantMsgCount, toolCallCount),
+            skills_invoked: skillsInvoked.OrderBy(s => s).ToArray(),
+            tools_used: toolUsage.OrderByDescending(kv => kv.Value).ToDictionary(kv => kv.Key, kv => kv.Value),
+            agent: agentName,
+            errors: errorCount,
+            last_activity: d.EndTime?.ToString("o"));
+        Console.WriteLine(JsonSerializer.Serialize(json, SummarySerializerOptions));
     }
     else
     {
@@ -3183,21 +3126,19 @@ void OutputWazaSummary(WazaData d, bool asJson)
 {
     if (asJson)
     {
-        var json = new
-        {
-            task_name = d.TaskName,
-            task_id = d.TaskId,
-            status = d.Status,
-            duration_ms = d.DurationMs,
-            duration_formatted = FormatDuration(TimeSpan.FromMilliseconds(d.DurationMs)),
-            total_turns = d.TotalTurns,
-            tool_calls = d.ToolCallCount,
-            tokens = new { input = d.TokensIn, output = d.TokensOut, total = d.TokensIn + d.TokensOut },
-            model = d.ModelId,
-            aggregate_score = d.AggregateScore,
-            validations = d.Validations.Select(v => new { v.name, v.score, v.passed, v.feedback }).ToArray()
-        };
-        Console.WriteLine(JsonSerializer.Serialize(json, new JsonSerializerOptions { WriteIndented = true }));
+        var json = new WazaSummary(
+            task_name: d.TaskName,
+            task_id: d.TaskId,
+            status: d.Status,
+            duration_ms: d.DurationMs,
+            duration_formatted: FormatDuration(TimeSpan.FromMilliseconds(d.DurationMs)),
+            total_turns: d.TotalTurns,
+            tool_calls: d.ToolCallCount,
+            tokens: new TokenCounts(d.TokensIn, d.TokensOut, d.TokensIn + d.TokensOut),
+            model: d.ModelId,
+            aggregate_score: d.AggregateScore,
+            validations: d.Validations.Select(v => new ValidationOutput(v.name, v.score, v.passed, v.feedback)).ToArray());
+        Console.WriteLine(JsonSerializer.Serialize(json, SummarySerializerOptions));
     }
     else
     {
@@ -3293,3 +3234,48 @@ record WazaData(
     string ModelId = "", double AggregateScore = 0, string[] ToolsUsed = null!);
 
 enum PagerAction { Quit, Browse, Resume }
+
+// ========== JSON output records and serializer options ==========
+record TurnOutput(
+    int turn,
+    string role,
+    string? timestamp = null,
+    string? content = null,
+    int? content_length = null,
+    string[]? tool_calls = null,
+    string? tool_name = null,
+    string? status = null,
+    string? args = null,
+    string? result_status = null,
+    int? result_length = null,
+    string? result = null);
+
+record TurnCounts(int user, int assistant, int tool_calls);
+record TokenCounts(int input, int output, int total);
+record ValidationOutput(string name, double score, bool passed, string feedback);
+
+record SessionSummary(
+    string session_id,
+    int duration_seconds,
+    string duration_formatted,
+    string? start_time,
+    string? end_time,
+    TurnCounts turns,
+    string[] skills_invoked,
+    Dictionary<string, int> tools_used,
+    string agent,
+    int errors,
+    string? last_activity);
+
+record WazaSummary(
+    string task_name,
+    string task_id,
+    string status,
+    double duration_ms,
+    string duration_formatted,
+    int total_turns,
+    int tool_calls,
+    TokenCounts tokens,
+    string model,
+    double aggregate_score,
+    ValidationOutput[] validations);

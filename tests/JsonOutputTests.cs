@@ -303,16 +303,25 @@ public class JsonOutputTests
         return path;
     }
 
+    private static readonly string ReplayCs = Path.GetFullPath(
+        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "replay.cs"));
+
     private string RunReplayWithArgs(string args)
     {
+        // Resolve any relative file paths to absolute so replay can find them
+        var parts = args.Split(' ', 2);
+        if (parts.Length > 0 && File.Exists(parts[0]))
+            args = Path.GetFullPath(parts[0]) + (parts.Length > 1 ? " " + parts[1] : "");
+
         var startInfo = new System.Diagnostics.ProcessStartInfo
         {
             FileName = "dotnet",
-            Arguments = $"run --project .. -- {args}",
+            Arguments = $"run {ReplayCs} -- {args}",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            WorkingDirectory = Path.GetDirectoryName(ReplayCs)!
         };
         
         using var process = System.Diagnostics.Process.Start(startInfo);
