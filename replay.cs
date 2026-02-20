@@ -956,6 +956,11 @@ JsonlData? ParseJsonlData(string path)
     string sessionId = "", branch = "", copilotVersion = "", cwd = "";
     DateTimeOffset? startTime = null, endTime = null;
 
+    // Derive session ID from directory name (Copilot session-state uses {guid}/events.jsonl)
+    var dirName = Path.GetFileName(Path.GetDirectoryName(path));
+    if (!string.IsNullOrEmpty(dirName) && Guid.TryParse(dirName, out _))
+        sessionId = dirName;
+
     foreach (var ev in events)
     {
         var root = ev.RootElement;
