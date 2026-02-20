@@ -3053,8 +3053,8 @@ void OutputSummary(JsonlData d, bool asJson)
                             toolUsage[toolName] = toolUsage.GetValueOrDefault(toolName) + 1;
                             
                             // Detect skill invocations
-                            if (toolName == "skill" && tr.TryGetProperty("args", out var args) 
-                                && args.TryGetProperty("skill", out var skillNameEl))
+                            if (toolName == "skill" && tr.TryGetProperty("arguments", out var arguments) 
+                                && arguments.TryGetProperty("skill", out var skillNameEl))
                             {
                                 skillsInvoked.Add(skillNameEl.GetString() ?? "");
                             }
