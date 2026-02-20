@@ -252,7 +252,7 @@ public class SummaryOutputTests
                     toolRequests = new[] {
                         new {
                             name = "skill",
-                            args = new { skill = "ci-analysis" }
+                            arguments = new { skill = "ci-analysis" }
                         }
                     }
                 }
