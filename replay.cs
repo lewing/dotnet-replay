@@ -1,6 +1,6 @@
 #:property ToolCommandName=replay
 #:property PackageId=dotnet-replay
-#:property Version=0.5.2
+#:property Version=0.5.3
 #:property Authors=Larry Ewing
 #:property Description=Interactive transcript viewer for Copilot CLI sessions and waza evaluations
 #:property PackageLicenseExpression=MIT
