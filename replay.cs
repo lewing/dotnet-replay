@@ -1,6 +1,6 @@
 #:property ToolCommandName=replay
 #:property PackageId=dotnet-replay
-#:property Version=0.5.3
+#:property Version=0.6.0
 #:property Authors=Larry Ewing
 #:property Description=Interactive transcript viewer for Copilot CLI sessions and waza evaluations
 #:property PackageLicenseExpression=MIT
@@ -9,6 +9,7 @@
 #:property PublishAot=false
 #:package Spectre.Console@0.49.1
 #:package Markdig@0.40.0
+#:package Microsoft.Data.Sqlite@9.0.3
 
 using System.Globalization;
 using System.Text;
@@ -18,6 +19,7 @@ using Markdig;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
 using Markdig.Extensions.Tables;
+using Microsoft.Data.Sqlite;
 using Spectre.Console;
 
 Console.OutputEncoding = Encoding.UTF8;
@@ -2444,6 +2446,77 @@ void StreamWazaTranscript(JsonDocument doc)
     }
 }
 
+// Try to load sessions from the Copilot CLI's SQLite session-store.db (read-only).
+// Returns null if the DB doesn't exist, has wrong schema, or any error occurs.
+List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPath, long fileSize, string branch, string repository)>? LoadSessionsFromDb(string sessionStateDir)
+{
+    var dbPath = Path.Combine(Path.GetDirectoryName(sessionStateDir)!, "session-store.db");
+    if (!File.Exists(dbPath)) return null;
+
+    try
+    {
+        using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+        conn.Open();
+
+        // Validate schema version
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'";
+            if (cmd.ExecuteScalar() == null) return null;
+        }
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT version FROM schema_version LIMIT 1";
+            var ver = cmd.ExecuteScalar();
+            if (ver == null || Convert.ToInt32(ver) != 1) return null;
+        }
+
+        // Validate sessions table has expected columns
+        var expectedCols = new HashSet<string> { "id", "cwd", "summary", "updated_at", "branch", "repository" };
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "PRAGMA table_info(sessions)";
+            var actualCols = new HashSet<string>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read()) actualCols.Add(reader.GetString(1));
+            if (!expectedCols.IsSubsetOf(actualCols)) return null;
+        }
+
+        // Load sessions
+        var results = new List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPath, long fileSize, string branch, string repository)>();
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id, cwd, summary, updated_at, branch, repository FROM sessions ORDER BY updated_at DESC";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var id = reader.GetString(0);
+                var cwd = reader.IsDBNull(1) ? "" : reader.GetString(1);
+                var summary = reader.IsDBNull(2) ? "" : reader.GetString(2);
+                var updatedStr = reader.IsDBNull(3) ? "" : reader.GetString(3);
+                var branch = reader.IsDBNull(4) ? "" : reader.GetString(4);
+                var repository = reader.IsDBNull(5) ? "" : reader.GetString(5);
+
+                DateTime.TryParse(updatedStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var updatedAt);
+
+                var eventsPath = Path.Combine(sessionStateDir, id, "events.jsonl");
+                long fileSize = 0;
+                if (File.Exists(eventsPath))
+                    try { fileSize = new FileInfo(eventsPath).Length; } catch { }
+                else
+                    continue; // skip DB entries without local transcript files
+
+                results.Add((id, summary, cwd, updatedAt, eventsPath, fileSize, branch, repository));
+            }
+        }
+        return results;
+    }
+    catch
+    {
+        return null; // any error → fall back to file scan
+    }
+}
+
 string? BrowseSessions(string sessionStateDir)
 {
     if (!Directory.Exists(sessionStateDir))
@@ -2453,57 +2526,71 @@ string? BrowseSessions(string sessionStateDir)
         return null;
     }
 
-    List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPath, long fileSize)> allSessions = [];
+    List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPath, long fileSize, string branch, string repository)> allSessions = [];
     var sessionsLock = new System.Threading.Lock();
     bool scanComplete = false;
     int lastRenderedCount = -1;
 
-    // Background scan thread
+    // Background scan thread — try DB first, fall back to file scan
     var scanThread = new Thread(() =>
     {
-        foreach (var dir in Directory.GetDirectories(sessionStateDir))
+        // Try loading Copilot sessions from SQLite DB (fast path)
+        var dbSessions = LoadSessionsFromDb(sessionStateDir);
+        if (dbSessions != null)
         {
-            var yamlPath = Path.Combine(dir, "workspace.yaml");
-            var eventsPath = Path.Combine(dir, "events.jsonl");
-            if (!File.Exists(yamlPath) || !File.Exists(eventsPath)) continue;
-
-            var props = new Dictionary<string, string>();
-            try
-            {
-                foreach (var line in File.ReadLines(yamlPath))
-                {
-                    var colonIdx = line.IndexOf(':');
-                    if (colonIdx > 0)
-                    {
-                        var key = line[..colonIdx].Trim();
-                        var value = line[(colonIdx + 1)..].Trim().Trim('"');
-                        props[key] = value;
-                    }
-                }
-            }
-            catch { continue; }
-
-            var id = props.GetValueOrDefault("id", Path.GetFileName(dir));
-            var summary = props.GetValueOrDefault("summary", "");
-            var cwd = props.GetValueOrDefault("cwd", "");
-            var updatedStr = props.GetValueOrDefault("updated_at", "");
-            DateTime.TryParse(updatedStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var updatedAt);
-
-            long fileSize = 0;
-            try { fileSize = new FileInfo(eventsPath).Length; } catch { }
-
             lock (sessionsLock)
             {
-                allSessions.Add((id, summary, cwd, updatedAt, eventsPath, fileSize));
-                if (allSessions.Count % 50 == 0)
-                    allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+                allSessions.AddRange(dbSessions);
+                allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
             }
         }
-        lock (sessionsLock)
+        else
         {
-            allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+            // Fallback: scan filesystem for Copilot sessions
+            foreach (var dir in Directory.GetDirectories(sessionStateDir))
+            {
+                var yamlPath = Path.Combine(dir, "workspace.yaml");
+                var eventsPath = Path.Combine(dir, "events.jsonl");
+                if (!File.Exists(yamlPath) || !File.Exists(eventsPath)) continue;
+
+                var props = new Dictionary<string, string>();
+                try
+                {
+                    foreach (var line in File.ReadLines(yamlPath))
+                    {
+                        var colonIdx = line.IndexOf(':');
+                        if (colonIdx > 0)
+                        {
+                            var key = line[..colonIdx].Trim();
+                            var value = line[(colonIdx + 1)..].Trim().Trim('"');
+                            props[key] = value;
+                        }
+                    }
+                }
+                catch { continue; }
+
+                var id = props.GetValueOrDefault("id", Path.GetFileName(dir));
+                var summary = props.GetValueOrDefault("summary", "");
+                var cwd = props.GetValueOrDefault("cwd", "");
+                var updatedStr = props.GetValueOrDefault("updated_at", "");
+                DateTime.TryParse(updatedStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var updatedAt);
+
+                long fileSize = 0;
+                try { fileSize = new FileInfo(eventsPath).Length; } catch { }
+
+                lock (sessionsLock)
+                {
+                    allSessions.Add((id, summary, cwd, updatedAt, eventsPath, fileSize, "", ""));
+                    if (allSessions.Count % 50 == 0)
+                        allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+                }
+            }
+            lock (sessionsLock)
+            {
+                allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+            }
         }
-        // Also scan Claude Code sessions
+        // Always scan Claude Code sessions (no DB available)
         var claudeProjectsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "projects");
         if (Directory.Exists(claudeProjectsDir))
         {
@@ -2538,7 +2625,7 @@ string? BrowseSessions(string sessionStateDir)
                         long fileSize = new FileInfo(jsonlFile).Length;
                         lock (sessionsLock)
                         {
-                            allSessions.Add((claudeId, claudeSummary, claudeCwd, claudeUpdatedAt, jsonlFile, fileSize));
+                            allSessions.Add((claudeId, claudeSummary, claudeCwd, claudeUpdatedAt, jsonlFile, fileSize, "", ""));
                             if (allSessions.Count % 50 == 0)
                                 allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
                         }
@@ -2578,7 +2665,7 @@ string? BrowseSessions(string sessionStateDir)
                 if (searchFilter.Length > 0)
                 {
                     var s = allSessions[i];
-                    var text = $"{s.summary} {s.cwd} {s.id}";
+                    var text = $"{s.summary} {s.cwd} {s.id} {s.branch} {s.repository}";
                     if (!text.Contains(searchFilter, StringComparison.OrdinalIgnoreCase))
                         continue;
                 }
@@ -2681,20 +2768,22 @@ string? BrowseSessions(string sessionStateDir)
             // Left side: session list
             if (vi < filtered.Count)
             {
-                string id, summary, cwd, eventsPath;
+                string id, summary, cwd, eventsPath, branch, repository;
                 DateTime updatedAt;
                 long fileSize;
                 lock (sessionsLock)
                 {
                     var si = filtered[vi];
-                    (id, summary, cwd, updatedAt, eventsPath, fileSize) = allSessions[si];
+                    (id, summary, cwd, updatedAt, eventsPath, fileSize, branch, repository) = allSessions[si];
                 }
                 var age = FormatAge(DateTime.UtcNow - updatedAt);
                 var size = FormatFileSize(fileSize);
                 var icon = eventsPath.Contains(".claude") ? "🔴" : "🤖";
+                var branchTag = !string.IsNullOrEmpty(branch) ? $" [{branch}]" : "";
                 var display = !string.IsNullOrEmpty(summary) ? summary : cwd;
-                int maxDisplay = Math.Max(10, listWidth - 21);
+                int maxDisplay = Math.Max(10, listWidth - 21 - branchTag.Length);
                 if (display.Length > maxDisplay) display = display[..(maxDisplay - 3)] + "...";
+                display += branchTag;
 
                 var rowPlain = $"  {icon} {age,6} {size,6} {display}";
                 var rowMarkup = $"  {icon} {age,6} {size,6} {Markup.Escape(display)}";
