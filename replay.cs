@@ -98,11 +98,11 @@ mdRenderer = new MarkdownRenderer(noColor);
 colors = new ColorHelper(noColor, full);
 cr = new ContentRenderer(colors, mdRenderer);
 var dataParsers = new DataParsers(tail);
-var pager = new InteractivePager(colors, cr, noColor, filePath, filterType, expandTools, tail);
-var outputFormatters = new OutputFormatters(colors, full);
-var statsAnalyzer = new StatsAnalyzer(colors, dataParsers.ParseJsonlData, dataParsers.ParseClaudeData, dataParsers.ParseWazaData);
+var pager = new InteractivePager(cr, noColor, filePath, filterType, expandTools);
+var outputFormatters = new OutputFormatters(full);
+var statsAnalyzer = new StatsAnalyzer(dataParsers.ParseJsonlData, dataParsers.ParseClaudeData, dataParsers.ParseWazaData);
 var sessionStateDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".copilot", "session-state");
-var sessionBrowser = new SessionBrowser(colors, cr, dataParsers, sessionStateDir);
+var sessionBrowser = new SessionBrowser(cr, dataParsers, sessionStateDir);
 
 // --- Stats command dispatch ---
 if (cliArgs.Length > 0 && cliArgs[0] == "stats")

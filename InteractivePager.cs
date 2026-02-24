@@ -8,7 +8,7 @@ using static EvalProcessor;
 /// <summary>
 /// Interactive terminal pager with scrolling, search, filtering, and follow mode.
 /// </summary>
-class InteractivePager(ColorHelper colors, ContentRenderer cr, bool noColor, string? filePath, string? filterType, bool expandTools, int? tail)
+class InteractivePager(ContentRenderer cr, bool noColor, string? filePath, string? filterType, bool expandTools)
 {
     public PagerAction Run<T>(List<string> headerLines, List<string> contentLines, T parsedData, bool isJsonlFormat, bool noFollow)
     {
@@ -624,6 +624,5 @@ class InteractivePager(ColorHelper colors, ContentRenderer cr, bool noColor, str
             Console.CursorVisible = true;
             AnsiConsole.Clear();
         }
-        return PagerAction.Quit;
     }
 }

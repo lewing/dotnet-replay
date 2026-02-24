@@ -2,7 +2,7 @@ using System.Text.Json;
 using static TextUtils;
 using static EvalProcessor;
 
-class StatsAnalyzer(ColorHelper colors, Func<string, JsonlData?> parseJsonlData, Func<string, JsonlData?> parseClaudeData, Func<JsonDocument, WazaData> parseWazaData)
+class StatsAnalyzer(Func<string, JsonlData?> parseJsonlData, Func<string, JsonlData?> parseClaudeData, Func<JsonDocument, WazaData> parseWazaData)
 {
     public FileStats? ExtractStats(string filePath)
     {

@@ -1,7 +1,7 @@
 using System.Text.Json;
 using static TextUtils;
 
-class OutputFormatters(ColorHelper colors, bool full)
+class OutputFormatters(bool full)
 {
     public void OutputJsonl(JsonlData d, string? filter, bool expandTool)
     {

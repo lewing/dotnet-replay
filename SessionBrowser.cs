@@ -6,7 +6,7 @@ using Spectre.Console;
 using static TextUtils;
 using static EvalProcessor;
 
-class SessionBrowser(ColorHelper colors, ContentRenderer cr, DataParsers dataParsers, string? sessionStateDir)
+class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessionStateDir)
 {
     public List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPath, long fileSize, string branch, string repository)>? LoadSessionsFromDb(string sessionStateDir, string? dbPathOverride = null)
     {
