@@ -64,3 +64,9 @@
 - **Updated replay.cs**: Created `statsAnalyzer` instance after `colors` initialization (~line 100), replaced all `ExtractStats` and `OutputStatsReport` call sites (3 locations total) with `statsAnalyzer.Method()`, and removed the original 350+ line function definitions.
 - Build succeeds with CS9113 warning (unread parameter `colors`) — acceptable since it's captured for future use. No functionality changes.
 
+### 2025-02-24: Session browser merge bug fixed
+- **Bug**: `BrowseSessions` used `else if` on line 1715, causing filesystem sessions to be completely skipped when DB loaded successfully. Sessions existing only on filesystem (older sessions, different machines) never appeared in the browser.
+- **Fix**: Changed `else if (dbPathOverride == null)` → `if (dbPathOverride == null)` so filesystem scan always runs (except with external `--db`). Added deduplication: check `knownSessionIds.Contains(id)` before adding filesystem sessions, and add filesystem IDs to `knownSessionIds` after adding to prevent Claude Code scan duplicates.
+- **Locations**: Line 1715 (else if → if), line 1742 (added continue check), line 1752 (added knownSessionIds.Add).
+- **Result**: All three session sources (DB, filesystem, Claude Code) now merge correctly, sorted by updatedAt descending. DB polling loop already used knownSessionIds for deduplication, so no changes needed there.
+
