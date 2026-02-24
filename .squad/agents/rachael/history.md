@@ -18,3 +18,15 @@
 ## Learnings
 
 <!-- Append new learnings below. Each entry is something lasting about the project. -->
+
+### 2025-02-24: DB Path Feature Tests (DbPathTests.cs)
+
+Added comprehensive tests for the new `--db <path>` CLI feature in tests/DbPathTests.cs. Key testing patterns:
+
+- **Subprocess invocation**: Tests use `dotnet run replay.cs -- <args>` to invoke the app as a subprocess
+- **TTY detection**: Must redirect StandardInput and close it immediately to trigger Console.IsOutputRedirected detection
+- **Dual output capture**: Return tuple `(stdout, stderr)` to verify error messages appear on stderr
+- **Test data cleanup**: Create temporary .db files and clean them up with try/finally
+- **Error behavior**: The app correctly detects redirected output and shows "Error: Cannot use --db in redirected output" on stderr
+
+All 5 tests pass successfully covering: nonexistent file handling, redirected output detection, positional .db argument sugar, missing argument error, and help text inclusion.

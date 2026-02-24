@@ -1,16 +1,3 @@
-#:property ToolCommandName=replay
-#:property PackageId=dotnet-replay
-#:property Version=0.6.0
-#:property Authors=Larry Ewing
-#:property Description=Interactive transcript viewer for Copilot CLI sessions and waza evaluations
-#:property PackageLicenseExpression=MIT
-#:property RepositoryUrl=https://github.com/lewing/dotnet-replay
-#:property PackageTags=copilot;transcript;viewer;waza;evaluation;cli
-#:property PublishAot=false
-#:package Spectre.Console@0.49.1
-#:package Markdig@0.40.0
-#:package Microsoft.Data.Sqlite@9.0.3
-
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -46,6 +33,7 @@ bool noFollow = false;
 bool jsonMode = false;
 bool summaryMode = false;
 
+string? dbPath = null;
 for (int i = 0; i < cliArgs.Length; i++)
 {
     // Skip general parsing when stats command is used — it has its own parser
@@ -85,9 +73,17 @@ for (int i = 0; i < cliArgs.Length; i++)
         case "--summary":
             summaryMode = true;
             break;
+        case "--db":
+            if (i + 1 < cliArgs.Length) dbPath = cliArgs[++i];
+            else { Console.Error.WriteLine("Error: --db requires a file path"); return; }
+            break;
         default:
             if (cliArgs[i].StartsWith("-")) { Console.Error.WriteLine($"Unknown option: {cliArgs[i]}"); PrintHelp(); return; }
-            filePath = cliArgs[i];
+            // Treat .db files as dbPath, not filePath
+            if (cliArgs[i].EndsWith(".db", StringComparison.OrdinalIgnoreCase))
+                dbPath = cliArgs[i];
+            else
+                filePath = cliArgs[i];
             break;
     }
 }
@@ -212,7 +208,38 @@ if (filePath is not null && Guid.TryParse(filePath, out _) && !File.Exists(fileP
     }
 }
 
-if (filePath is null)
+// If dbPath is set, go directly to browser mode with that DB
+if (dbPath is not null)
+{
+    if (Console.IsOutputRedirected)
+    {
+        Console.Error.WriteLine("Error: Cannot use --db in redirected output");
+        return;
+    }
+    filePath = BrowseSessions(sessionStateDir, dbPath);
+    if (filePath is null) return;
+    // Browser mode: loop between browser and pager
+    bool browsing = true;
+    while (browsing)
+    {
+        var action = OpenFile(filePath!);
+        switch (action)
+        {
+            case PagerAction.Browse:
+                filePath = BrowseSessions(sessionStateDir, dbPath);
+                if (filePath is null) browsing = false;
+                break;
+            case PagerAction.Resume:
+                LaunchResume(filePath!);
+                browsing = false;
+                break;
+            default:
+                browsing = false;
+                break;
+        }
+    }
+}
+else if (filePath is null)
 {
     if (Console.IsOutputRedirected)
     {
@@ -2952,9 +2979,9 @@ void StreamWazaTranscript(JsonDocument doc)
 
 // Try to load sessions from the Copilot CLI's SQLite session-store.db (read-only).
 // Returns null if the DB doesn't exist, has wrong schema, or any error occurs.
-List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPath, long fileSize, string branch, string repository)>? LoadSessionsFromDb(string sessionStateDir)
+List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPath, long fileSize, string branch, string repository)>? LoadSessionsFromDb(string sessionStateDir, string? dbPathOverride = null)
 {
-    var dbPath = Path.Combine(Path.GetDirectoryName(sessionStateDir)!, "session-store.db");
+    var dbPath = dbPathOverride ?? Path.Combine(Path.GetDirectoryName(sessionStateDir)!, "session-store.db");
     if (!File.Exists(dbPath)) return null;
 
     try
@@ -3021,9 +3048,10 @@ List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPa
     }
 }
 
-string? BrowseSessions(string sessionStateDir)
+string? BrowseSessions(string sessionStateDir, string? dbPathOverride = null)
 {
-    if (!Directory.Exists(sessionStateDir))
+    // When using external DB, skip directory check
+    if (dbPathOverride == null && !Directory.Exists(sessionStateDir))
     {
         Console.Error.WriteLine("No Copilot session directory found.");
         Console.Error.WriteLine($"Expected: {sessionStateDir}");
@@ -3039,18 +3067,30 @@ string? BrowseSessions(string sessionStateDir)
     var scanThread = new Thread(() =>
     {
         // Try loading Copilot sessions from SQLite DB (fast path)
-        var dbSessions = LoadSessionsFromDb(sessionStateDir);
+        var dbSessions = LoadSessionsFromDb(sessionStateDir, dbPathOverride);
+        string? dbPath = null;
+        var knownSessionIds = new HashSet<string>();
+        DateTime lastUpdatedAt = DateTime.MinValue;
+
         if (dbSessions != null)
         {
+            // Record the DB path for polling
+            dbPath = dbPathOverride ?? Path.Combine(Path.GetDirectoryName(sessionStateDir)!, "session-store.db");
+            
             lock (sessionsLock)
             {
                 allSessions.AddRange(dbSessions);
                 allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+                foreach (var s in dbSessions)
+                {
+                    knownSessionIds.Add(s.id);
+                    if (s.updatedAt > lastUpdatedAt) lastUpdatedAt = s.updatedAt;
+                }
             }
         }
-        else
+        else if (dbPathOverride == null)
         {
-            // Fallback: scan filesystem for Copilot sessions
+            // Fallback: scan filesystem for Copilot sessions (only when not using external DB)
             foreach (var dir in Directory.GetDirectories(sessionStateDir))
             {
                 var yamlPath = Path.Combine(dir, "workspace.yaml");
@@ -3094,10 +3134,13 @@ string? BrowseSessions(string sessionStateDir)
                 allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
             }
         }
-        // Always scan Claude Code sessions (no DB available)
-        var claudeProjectsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "projects");
-        if (Directory.Exists(claudeProjectsDir))
+        
+        // Always scan Claude Code sessions (no DB available), skip if using external DB
+        if (dbPathOverride == null)
         {
+            var claudeProjectsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "projects");
+            if (Directory.Exists(claudeProjectsDir))
+            {
             foreach (var projDir in Directory.GetDirectories(claudeProjectsDir))
             {
                 foreach (var jsonlFile in Directory.GetFiles(projDir, "*.jsonl"))
@@ -3142,7 +3185,64 @@ string? BrowseSessions(string sessionStateDir)
         {
             allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
         }
+        }
         scanComplete = true;
+        
+        // If we loaded from DB, poll for new sessions every 5 seconds
+        if (dbPath != null)
+        {
+            while (true)
+            {
+                Thread.Sleep(5000);
+                
+                try
+                {
+                    using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+                    conn.Open();
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT id, cwd, summary, updated_at, branch, repository FROM sessions WHERE updated_at > @lastUpdated ORDER BY updated_at DESC";
+                    cmd.Parameters.AddWithValue("@lastUpdated", lastUpdatedAt.ToString("o"));
+                    
+                    using var reader = cmd.ExecuteReader();
+                    var newSessions = new List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPath, long fileSize, string branch, string repository)>();
+                    
+                    while (reader.Read())
+                    {
+                        var id = reader.GetString(0);
+                        if (knownSessionIds.Contains(id)) continue; // skip duplicates
+                        
+                        var cwd = reader.IsDBNull(1) ? "" : reader.GetString(1);
+                        var summary = reader.IsDBNull(2) ? "" : reader.GetString(2);
+                        var updatedStr = reader.IsDBNull(3) ? "" : reader.GetString(3);
+                        var branch = reader.IsDBNull(4) ? "" : reader.GetString(4);
+                        var repository = reader.IsDBNull(5) ? "" : reader.GetString(5);
+                        
+                        DateTime.TryParse(updatedStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var updatedAt);
+                        
+                        var eventsPath = Path.Combine(sessionStateDir, id, "events.jsonl");
+                        long fileSize = 0;
+                        if (File.Exists(eventsPath))
+                            try { fileSize = new FileInfo(eventsPath).Length; } catch { }
+                        else
+                            continue;
+                        
+                        newSessions.Add((id, summary, cwd, updatedAt, eventsPath, fileSize, branch, repository));
+                        knownSessionIds.Add(id);
+                        if (updatedAt > lastUpdatedAt) lastUpdatedAt = updatedAt;
+                    }
+                    
+                    if (newSessions.Count > 0)
+                    {
+                        lock (sessionsLock)
+                        {
+                            allSessions.AddRange(newSessions);
+                            allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+                        }
+                    }
+                }
+                catch { /* ignore polling errors */ }
+            }
+        }
     });
     scanThread.IsBackground = true;
     scanThread.Start();
@@ -4255,13 +4355,15 @@ void PrintHelp()
     Console.WriteLine("""
 
     Usage: replay [file|session-id] [options]
+          replay --db <path>
           replay stats <files...> [options]
 
-      <file>              Path to .jsonl or .json transcript file
+      <file>              Path to .jsonl or .json transcript file, or .db file
       <session-id>        GUID of a Copilot CLI session to open
       (no args)           Browse recent Copilot CLI sessions
 
     Options:
+      --db <path>         Browse sessions from an external session-store.db file
       --tail <N>          Show only the last N conversation turns
       --expand-tools      Show tool arguments, results, and thinking/reasoning
       --full              Don't truncate tool output (use with --expand-tools)
@@ -4316,112 +4418,4 @@ void PrintHelp()
     """);
 }
 
-// ========== Parsed data structures (must follow top-level statements) ==========
-record JsonlData(
-    List<JsonDocument> Events,
-    List<(string type, JsonElement root, DateTimeOffset? ts)> Turns,
-    string SessionId, string Branch, string CopilotVersion, string Cwd,
-    DateTimeOffset? StartTime, DateTimeOffset? EndTime, int EventCount)
-{
-    public int EventCount { get; set; } = EventCount;
-}
 
-record WazaData(
-    JsonElement[] TranscriptItems,
-    string TaskName, string TaskId, string Status, string Prompt, string FinalOutput,
-    double DurationMs, int TotalTurns, int ToolCallCount, int TokensIn, int TokensOut,
-    List<(string name, double score, bool passed, string feedback)> Validations,
-    string ModelId = "", double AggregateScore = 0, string[] ToolsUsed = null!);
-
-class EvalCaseResult
-{
-    public string Name { get; set; } = "";
-    public string Prompt { get; set; } = "";
-    public bool? Passed { get; set; }
-    public double DurationMs { get; set; }
-    public int ToolCallCount { get; set; }
-    public List<string> ToolsUsed { get; set; } = [];
-    public int ResponseLength { get; set; }
-    public string? AssertionFeedback { get; set; }
-    public string? Error { get; set; }
-    public StringBuilder MessageAccumulator { get; } = new();
-    public List<(string tool, string id, double durationMs)> ToolEvents { get; set; } = [];
-    public Dictionary<string, DateTimeOffset> PendingTools { get; } = new();
-}
-
-class EvalData
-{
-    public string Suite { get; set; } = "";
-    public string Description { get; set; } = "";
-    public int CaseCount { get; set; }
-    public List<EvalCaseResult> Cases { get; set; } = [];
-    public int TotalPassed { get; set; }
-    public int TotalFailed { get; set; }
-    public int TotalSkipped { get; set; }
-    public double TotalDurationMs { get; set; }
-    public int TotalToolCalls { get; set; }
-    public string? CurrentCase { get; set; }
-}
-
-enum PagerAction { Quit, Browse, Resume }
-
-// ========== JSON output records and serializer options ==========
-record TurnOutput(
-    int turn,
-    string role,
-    string? timestamp = null,
-    string? content = null,
-    int? content_length = null,
-    string[]? tool_calls = null,
-    string? tool_name = null,
-    string? status = null,
-    string? args = null,
-    string? result_status = null,
-    int? result_length = null,
-    string? result = null);
-
-record TurnCounts(int user, int assistant, int tool_calls);
-record TokenCounts(int input, int output, int total);
-record ValidationOutput(string name, double score, bool passed, string feedback);
-
-record SessionSummary(
-    string session_id,
-    int duration_seconds,
-    string duration_formatted,
-    string? start_time,
-    string? end_time,
-    TurnCounts turns,
-    string[] skills_invoked,
-    Dictionary<string, int> tools_used,
-    string agent,
-    int errors,
-    string? last_activity);
-
-record WazaSummary(
-    string task_name,
-    string task_id,
-    string status,
-    double duration_ms,
-    string duration_formatted,
-    int total_turns,
-    int tool_calls,
-    TokenCounts tokens,
-    string model,
-    double aggregate_score,
-    ValidationOutput[] validations);
-
-record FileStats(
-    string FilePath,
-    string Format,
-    string? Model,
-    string? TaskName,
-    string? TaskId,
-    string? Status,
-    int TurnCount,
-    int ToolCallCount,
-    int ErrorCount,
-    double DurationSeconds,
-    double? AggregateScore,
-    bool? Passed,
-    Dictionary<string, int> ToolUsage,
-    string? Agent);

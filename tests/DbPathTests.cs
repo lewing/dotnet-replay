@@ -67,14 +67,14 @@ public class DbPathTests
     }
 
     private static readonly string ReplayCs = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "replay.cs"));
+        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "dotnet-replay.csproj"));
 
     private (string stdout, string stderr) RunReplayWithArgs(string args)
     {
         var startInfo = new System.Diagnostics.ProcessStartInfo
         {
             FileName = "dotnet",
-            Arguments = $"run {ReplayCs} -- {args}",
+            Arguments = $"run --project {ReplayCs} -- {args}",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             RedirectStandardInput = true, // Need to redirect input too for proper TTY detection

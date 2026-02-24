@@ -35,3 +35,11 @@
 - **Feature 2:** Added `--db <path>` CLI argument to load sessions from an external session-store.db file. CLI parsing treats .db files as dbPath (not filePath). `LoadSessionsFromDb` and `BrowseSessions` now accept optional `dbPathOverride` parameter. When external DB is used, filesystem fallback scan is skipped.
 - Both features integrate with existing `sessionsLock` and UI throttle loop — no changes needed to rendering logic.
 - Pattern: Use background thread polling with `Thread.Sleep(5000)` for periodic updates in TUI apps.
+
+### 2025-07-22: Convert from file-based app to .csproj project
+- **Created `dotnet-replay.csproj`**: Migrated all `#:property` and `#:package` directives from replay.cs into a standard .csproj with `<PackAsTool>`, `<ToolCommandName>`, package references, and `<Compile Remove>` for tests/ and .squad/ directories.
+- **Extracted `Models.cs`**: Moved all record types (JsonlData, WazaData, EvalCaseResult, EvalData, PagerAction, TurnOutput, TurnCounts, TokenCounts, ValidationOutput, SessionSummary, WazaSummary, FileStats) to a separate file. These had no captured state dependencies — cleanest extraction target.
+- **Updated test project**: Removed `<Compile Include="..\replay.cs">` and `<Features>FileBasedProgram</Features>` from ReplayTests.csproj. Changed all test files to use `dotnet run --project {csproj}` instead of `dotnet run {replay.cs}`.
+- **Key constraint preserved**: All local functions in replay.cs capture top-level variables (noColor, expandTools, full, filterType, tail, markdownPipeline, etc.). Extracting them to classes requires threading a shared options object through all call sites — deferred to a follow-up iteration.
+- **Decision**: Incremental > perfect. The csproj conversion is the structural foundation. Further splitting (MarkdownRenderer, ContentRenderer, SessionBrowser, etc.) can follow incrementally now that the project structure supports multiple files.
+- All 67 tests pass after conversion.

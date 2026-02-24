@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>replay</ToolCommandName>
+    <PackageId>dotnet-replay</PackageId>
+    <Version>0.6.0</Version>
+    <Authors>Larry Ewing</Authors>
+    <Description>Interactive transcript viewer for Copilot CLI sessions and waza evaluations</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/lewing/dotnet-replay</RepositoryUrl>
+    <PackageTags>copilot;transcript;viewer;waza;evaluation;cli</PackageTags>
+    <PublishAot>false</PublishAot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Spectre.Console" Version="0.49.1" />
+    <PackageReference Include="Markdig" Version="0.40.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="tests\**" />
+    <Compile Remove=".squad\**" />
+  </ItemGroup>
+
+</Project>

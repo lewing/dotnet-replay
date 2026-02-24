@@ -35,3 +35,11 @@
 ## Learnings
 
 <!-- Append new learnings below. Each entry is something lasting about the project. -->
+
+- replay.cs is now **4,542 lines** (not ~3,300 as previously documented). Growth mostly in eval processing, session browser, and stats.
+- .NET 10 file-based apps do NOT support a `#:file` directive — they are strictly single-file by design.
+- .NET 10 file-based apps DO support `#:project ../lib/Lib.csproj` to reference class library projects. This is the official decomposition path.
+- All functions in replay.cs are **local functions** capturing top-level variables (`noColor`, `expandTools`, `markdownPipeline`, etc.). Splitting requires bundling these into a shared options type.
+- The three largest extractable sections: Content Rendering (962 lines), Session Browser (696 lines), Markdown Rendering (598 lines).
+- Tests invoke `dotnet run replay.cs` via subprocess — a `#:project` split should be transparent to them as long as replay.cs remains the entry point.
+- `dotnet pack replay.cs` produces the NuGet global tool — need to verify `#:project` compatibility with pack before committing to the split.

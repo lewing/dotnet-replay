@@ -418,7 +418,7 @@ public class SummaryOutputTests
     }
 
     private static readonly string ReplayCs = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "replay.cs"));
+        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "dotnet-replay.csproj"));
 
     private string RunReplayWithArgs(string args)
     {
@@ -429,7 +429,7 @@ public class SummaryOutputTests
         var startInfo = new System.Diagnostics.ProcessStartInfo
         {
             FileName = "dotnet",
-            Arguments = $"run {ReplayCs} -- {args}",
+            Arguments = $"run --project {ReplayCs} -- {args}",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
