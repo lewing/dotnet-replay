@@ -70,3 +70,12 @@
 - **Locations**: Line 1715 (else if → if), line 1742 (added continue check), line 1752 (added knownSessionIds.Add).
 - **Result**: All three session sources (DB, filesystem, Claude Code) now merge correctly, sorted by updatedAt descending. DB polling loop already used knownSessionIds for deduplication, so no changes needed there.
 
+### 2025-02-24: InteractivePager extraction complete
+- **Extracted InteractivePager.cs**: Moved the `RunInteractivePager<T>` method and all its nested helper functions (~615 lines) from replay.cs into a new InteractivePager class.
+- **Design**: Primary constructor takes dependencies: `ColorHelper colors`, `ContentRenderer cr`, `bool noColor`, `string? filePath`, `string? filterType`, `bool expandTools`, `int? tail`. The main method is now `Run<T>()` instead of `RunInteractivePager<T>()`.
+- **Dependencies**: Relies on TextUtils static functions (GetVisibleText, VisibleWidth, TruncateToWidth, etc.), SafeGetString from TextUtils, and ProcessEvalEvent from EvalProcessor. All nested local functions (RebuildContent, RebuildSearchMatches, Render, WriteMarkupLine, etc.) became nested local functions within the Run method to maintain closure over method-local state.
+- **Updated replay.cs**: Created `pager` instance after `cr` initialization (~line 100), replaced all 3 `RunInteractivePager` call sites with `pager.Run()`, and removed the original 615-line method definition.
+- **Result**: replay.cs reduced from ~2,027 lines to 1,410 lines. Build succeeds with CS9113 warnings (unread parameters `colors` and `tail` — preserved for future use). All 67 tests pass.
+- **Pattern**: Terminal UI code with stateful loops can be extracted to classes while keeping local function closures inside the main method to avoid threading shared state through every helper.
+
+
