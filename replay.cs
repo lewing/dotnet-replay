@@ -979,7 +979,7 @@ PagerAction OpenFile(string path)
             if (parsed is null) return PagerAction.Quit;
             headerLines = RenderEvalHeaderLines(parsed);
             contentLines = RenderEvalContentLines(parsed, filterType, expandTools);
-            return RunInteractivePager(headerLines, contentLines, parsed, isJsonlFormat: false, noFollow: !noFollow);
+            return RunInteractivePager(headerLines, contentLines, parsed, isJsonlFormat: true, noFollow: noFollow);
         }
         else if (isJsonl)
         {
@@ -3590,7 +3590,8 @@ string FormatFileSize(long bytes)
     if (bytes < 1024 * 1024) return $"{bytes / 1024}KB";
     return $"{bytes / (1024 * 1024.0):F1}MB";
 }
-
+
+
 // ========== JSON and Summary Output Modes ==========
 
 void OutputJsonl(JsonlData d, string? filter, bool expandTool)
