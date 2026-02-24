@@ -2,26 +2,14 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using Markdig;
-using Markdig.Syntax;
-using Markdig.Syntax.Inlines;
-using Markdig.Extensions.Tables;
 using Microsoft.Data.Sqlite;
 using Spectre.Console;
 using static TextUtils;
 using static EvalProcessor;
 
 Console.OutputEncoding = Encoding.UTF8;
-var markdownPipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
 MarkdownRenderer? mdRenderer = null; // initialized after noColor is parsed
-var JsonlSerializerOptions = new JsonSerializerOptions
-{
-    DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-};
-var SummarySerializerOptions = new JsonSerializerOptions
-{
-    WriteIndented = true
-};
+ColorHelper? colors = null;
 
 // --- CLI argument parsing ---
 var cliArgs = Environment.GetCommandLineArgs().Skip(1).ToArray();
@@ -106,8 +94,9 @@ if (jsonMode || summaryMode)
     noColor = true;
 }
 
-mdRenderer = new MarkdownRenderer(markdownPipeline, noColor);
-cr = new ContentRenderer(noColor, full, mdRenderer);
+mdRenderer = new MarkdownRenderer(noColor);
+colors = new ColorHelper(noColor, full);
+cr = new ContentRenderer(colors, mdRenderer);
 
 // --- Stats command dispatch ---
 if (cliArgs.Length > 0 && cliArgs[0] == "stats")
@@ -918,7 +907,7 @@ void OutputEvalSummary(EvalData d, bool asJson)
             total_duration_ms = d.TotalDurationMs,
             total_tool_calls = d.TotalToolCalls
         };
-        Console.WriteLine(JsonSerializer.Serialize(summary, SummarySerializerOptions));
+        Console.WriteLine(JsonSerializer.Serialize(summary, ColorHelper.SummarySerializer));
     }
     else
     {
@@ -2019,8 +2008,8 @@ string? BrowseSessions(string sessionStateDir, string? dbPathOverride = null)
                 var icon = eventsPath.Contains(".claude") ? "🔴" : "🤖";
                 var branchTag = !string.IsNullOrEmpty(branch) ? $" [{branch}]" : "";
                 var display = !string.IsNullOrEmpty(summary) ? summary : cwd;
-                int maxDisplay = Math.Max(10, listWidth - 21 - branchTag.Length);
-                if (display.Length > maxDisplay) display = display[..(maxDisplay - 3)] + "...";
+                int maxDisplay = Math.Max(10, listWidth - 21 - VisibleWidth(branchTag));
+                if (VisibleWidth(display) > maxDisplay) display = TruncateToWidth(display, maxDisplay - 3) + "...";
                 display += branchTag;
 
                 var rowPlain = $"  {icon} {age,6} {size,6} {display}";
@@ -2341,7 +2330,7 @@ void OutputJsonl(JsonlData d, string? filter, bool expandTool)
             {
                 var content = SafeGetString(data, "content");
                 var json = new TurnOutput(turnIndex, "user", ts?.ToString("o"), content, content.Length);
-                Console.WriteLine(JsonSerializer.Serialize(json, JsonlSerializerOptions));
+                Console.WriteLine(JsonSerializer.Serialize(json, ColorHelper.JsonlSerializer));
                 turnIndex++;
                 break;
             }
@@ -2361,7 +2350,7 @@ void OutputJsonl(JsonlData d, string? filter, bool expandTool)
                 
                 var json = new TurnOutput(turnIndex, "assistant", ts?.ToString("o"), content, content.Length,
                     tool_calls: toolCallNames.Count > 0 ? toolCallNames.ToArray() : null);
-                Console.WriteLine(JsonSerializer.Serialize(json, JsonlSerializerOptions));
+                Console.WriteLine(JsonSerializer.Serialize(json, ColorHelper.JsonlSerializer));
                 turnIndex++;
                 break;
             }
@@ -2373,7 +2362,7 @@ void OutputJsonl(JsonlData d, string? filter, bool expandTool)
                 var json = new TurnOutput(turnIndex, "tool", ts?.ToString("o"),
                     tool_name: toolName, status: "start",
                     args: expandTool && args.ValueKind != JsonValueKind.Undefined ? JsonSerializer.Serialize(args) : null);
-                Console.WriteLine(JsonSerializer.Serialize(json, JsonlSerializerOptions));
+                Console.WriteLine(JsonSerializer.Serialize(json, ColorHelper.JsonlSerializer));
                 break;
             }
             case "tool.result":
@@ -2389,7 +2378,7 @@ void OutputJsonl(JsonlData d, string? filter, bool expandTool)
                         result_status: expandTool ? resultStatus : null,
                         result_length: output.Length,
                         result: expandTool ? (full ? output : (output.Length > 500 ? output[..500] + "..." : output)) : null);
-                    Console.WriteLine(JsonSerializer.Serialize(json, JsonlSerializerOptions));
+                    Console.WriteLine(JsonSerializer.Serialize(json, ColorHelper.JsonlSerializer));
                 }
                 break;
             }
@@ -2421,7 +2410,7 @@ void OutputWazaJsonl(WazaData d, string? filter, bool expandTool)
             }
             
             var json = new TurnOutput(turnIndex, role!, content: content, content_length: content?.Length ?? 0);
-            Console.WriteLine(JsonSerializer.Serialize(json, JsonlSerializerOptions));
+            Console.WriteLine(JsonSerializer.Serialize(json, ColorHelper.JsonlSerializer));
             turnIndex++;
         }
     }
@@ -2509,7 +2498,7 @@ void OutputSummary(JsonlData d, bool asJson)
             agent: agentName,
             errors: errorCount,
             last_activity: d.EndTime?.ToString("o"));
-        Console.WriteLine(JsonSerializer.Serialize(json, SummarySerializerOptions));
+        Console.WriteLine(JsonSerializer.Serialize(json, ColorHelper.SummarySerializer));
     }
     else
     {
@@ -2547,7 +2536,7 @@ void OutputWazaSummary(WazaData d, bool asJson)
             model: d.ModelId,
             aggregate_score: d.AggregateScore,
             validations: d.Validations.Select(v => new ValidationOutput(v.name, v.score, v.passed, v.feedback)).ToArray());
-        Console.WriteLine(JsonSerializer.Serialize(json, SummarySerializerOptions));
+        Console.WriteLine(JsonSerializer.Serialize(json, ColorHelper.SummarySerializer));
     }
     else
     {
@@ -2818,7 +2807,7 @@ void OutputStatsReport(List<FileStats> stats, string? groupBy, bool asJson, int?
                     avg_tool_calls = g.Average(s => s.ToolCallCount)
                 }).OrderBy(x => x.model).ToArray();
                 
-                Console.WriteLine(JsonSerializer.Serialize(new { summary, by_model = byModel }, SummarySerializerOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new { summary, by_model = byModel }, ColorHelper.SummarySerializer));
             }
             else if (groupBy == "task")
             {
@@ -2833,12 +2822,12 @@ void OutputStatsReport(List<FileStats> stats, string? groupBy, bool asJson, int?
                     avg_tool_calls = g.Average(s => s.ToolCallCount)
                 }).OrderBy(x => x.task).ToArray();
                 
-                Console.WriteLine(JsonSerializer.Serialize(new { summary, by_task = byTask }, SummarySerializerOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new { summary, by_task = byTask }, ColorHelper.SummarySerializer));
             }
         }
         else
         {
-            Console.WriteLine(JsonSerializer.Serialize(summary, SummarySerializerOptions));
+            Console.WriteLine(JsonSerializer.Serialize(summary, ColorHelper.SummarySerializer));
         }
     }
     else

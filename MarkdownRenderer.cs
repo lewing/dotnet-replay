@@ -8,8 +8,9 @@ using MdTable = Markdig.Extensions.Tables.Table;
 using MdTableRow = Markdig.Extensions.Tables.TableRow;
 using MdTableCell = Markdig.Extensions.Tables.TableCell;
 
-class MarkdownRenderer(MarkdownPipeline pipeline, bool noColor)
+class MarkdownRenderer(bool noColor)
 {
+    readonly MarkdownPipeline pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
     public List<string> RenderLines(string markdown, string colorName, string prefix = "┃ ")
     {
         if (noColor || string.IsNullOrEmpty(markdown))
@@ -187,7 +188,7 @@ class MarkdownRenderer(MarkdownPipeline pipeline, bool noColor)
                     var widths = new int[colCount];
                     foreach (var row in rows)
                         for (int c = 0; c < row.Count; c++)
-                            widths[c] = Math.Max(widths[c], StripMarkup(row[c]).Length);
+                            widths[c] = Math.Max(widths[c], VisibleWidth(StripMarkup(row[c])));
 
                     for (int r = 0; r < rows.Count; r++)
                     {
@@ -196,7 +197,7 @@ class MarkdownRenderer(MarkdownPipeline pipeline, bool noColor)
                         {
                             if (c > 0) sb.Append(" | ");
                             var cell = c < rows[r].Count ? rows[r][c] : "";
-                            var pad = widths[c] - StripMarkup(cell).Length;
+                            var pad = widths[c] - VisibleWidth(StripMarkup(cell));
                             sb.Append(cell);
                             if (pad > 0) sb.Append(new string(' ', pad));
                         }

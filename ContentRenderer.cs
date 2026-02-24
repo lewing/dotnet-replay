@@ -2,18 +2,17 @@ using System.Text.Json;
 using Spectre.Console;
 using static TextUtils;
 
-class ContentRenderer(bool noColor, bool full, MarkdownRenderer mdRenderer)
+class ContentRenderer(ColorHelper colors, MarkdownRenderer mdRenderer)
 {
-    // Color helpers (same as replay.cs top-level, duplicated for extraction independence)
-    string Blue(string s) => noColor ? s : $"[blue]{Markup.Escape(s)}[/]";
-    string Green(string s) => noColor ? s : $"[green]{Markup.Escape(s)}[/]";
-    string Yellow(string s) => noColor ? s : $"[yellow]{Markup.Escape(s)}[/]";
-    string Red(string s) => noColor ? s : $"[red]{Markup.Escape(s)}[/]";
-    string Dim(string s) => noColor ? s : $"[dim]{Markup.Escape(s)}[/]";
-    string Bold(string s) => noColor ? s : $"[bold]{Markup.Escape(s)}[/]";
-    string Cyan(string s) => noColor ? s : $"[cyan]{Markup.Escape(s)}[/]";
-    string Separator() => noColor ? new string('-', 60) : $"[dim]{new string('─', Math.Max(40, AnsiConsole.Profile.Width))}[/]";
-    string Truncate(string s, int max) => full ? s : s.Length <= max ? s : s[..max] + $"… [{s.Length - max} more chars]";
+    string Blue(string s) => colors.Blue(s);
+    string Green(string s) => colors.Green(s);
+    string Yellow(string s) => colors.Yellow(s);
+    string Red(string s) => colors.Red(s);
+    string Dim(string s) => colors.Dim(s);
+    string Bold(string s) => colors.Bold(s);
+    string Cyan(string s) => colors.Cyan(s);
+    string Separator() => colors.Separator();
+    string Truncate(string s, int max) => colors.Truncate(s, max);
 
     public List<string> FormatJsonProperties(JsonElement obj, string linePrefix, int maxValueLen)
     {
@@ -418,7 +417,7 @@ class ContentRenderer(bool noColor, bool full, MarkdownRenderer mdRenderer)
                         {
                             lines.Add(margin + colorFn("┃"));
                             var truncated = Truncate(resultContent, 500);
-                            foreach (var line in SplitLines(truncated).Take(full ? int.MaxValue : 20))
+                            foreach (var line in SplitLines(truncated).Take(colors.Full ? int.MaxValue : 20))
                                 lines.Add(margin + colorFn($"┃   {line}"));
                         }
                     }
@@ -528,7 +527,7 @@ class ContentRenderer(bool noColor, bool full, MarkdownRenderer mdRenderer)
                         else
                         {
                             var truncated = Truncate(resStr, 500);
-                            var resLines = SplitLines(truncated).Take(full ? int.MaxValue : 20).ToArray();
+                            var resLines = SplitLines(truncated).Take(colors.Full ? int.MaxValue : 20).ToArray();
                             if (resLines.Length > 0)
                                 lines.Add(margin + Dim($"┃   Result: {resLines[0]}"));
                             foreach (var line in resLines.Skip(1))
