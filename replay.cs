@@ -1714,7 +1714,7 @@ string? BrowseSessions(string sessionStateDir, string? dbPathOverride = null)
         }
         else if (dbPathOverride == null)
         {
-            // Fallback: scan filesystem for Copilot sessions (only when not using external DB)
+            // Fallback: scan filesystem for Copilot sessions (only when DB not available)
             foreach (var dir in Directory.GetDirectories(sessionStateDir))
             {
                 var yamlPath = Path.Combine(dir, "workspace.yaml");
@@ -1749,6 +1749,7 @@ string? BrowseSessions(string sessionStateDir, string? dbPathOverride = null)
                 lock (sessionsLock)
                 {
                     allSessions.Add((id, summary, cwd, updatedAt, eventsPath, fileSize, "", ""));
+                    knownSessionIds.Add(id);
                     if (allSessions.Count % 50 == 0)
                         allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
                 }
