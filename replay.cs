@@ -880,6 +880,10 @@ PagerAction OpenFile(string path)
     if (isJsonl && IsClaudeFormat(path))
         isClaude = true;
 
+    bool isEval = false;
+    if (isJsonl && !isClaude && IsEvalFormat(path))
+        isEval = true;
+
     bool isWaza = false;
     JsonDocument? wazaDoc = null;
 
@@ -915,7 +919,13 @@ PagerAction OpenFile(string path)
         if (summaryMode)
         {
             // Summary mode: high-level session stats
-            if (isJsonl)
+            if (isEval)
+            {
+                var parsed = ParseEvalData(path);
+                if (parsed is not null)
+                    OutputEvalSummary(parsed, jsonMode);
+            }
+            else if (isJsonl)
             {
                 var parsed = isClaude ? ParseClaudeData(path) : ParseJsonlData(path);
                 if (parsed is not null)
@@ -930,7 +940,13 @@ PagerAction OpenFile(string path)
         else if (jsonMode)
         {
             // JSON mode: structured JSONL output
-            if (isJsonl)
+            if (isEval)
+            {
+                var parsed = ParseEvalData(path);
+                if (parsed is not null)
+                    OutputEvalSummary(parsed, true);
+            }
+            else if (isJsonl)
             {
                 var parsed = isClaude ? ParseClaudeData(path) : ParseJsonlData(path);
                 if (parsed is not null)
@@ -945,7 +961,8 @@ PagerAction OpenFile(string path)
         else
         {
             // Standard stream mode
-            if (isJsonl && !isClaude) StreamEventsJsonl(path);
+            if (isEval) StreamEvalEvents(path);
+            else if (isJsonl && !isClaude) StreamEventsJsonl(path);
             else if (isJsonl && isClaude) { var p = ParseClaudeData(path); if (p != null) { var cl = RenderJsonlContentLines(p, filterType, expandTools); foreach (var l in cl) Console.WriteLine(l); } }
             else if (isWaza) StreamWazaTranscript(wazaDoc!);
         }
@@ -956,7 +973,15 @@ PagerAction OpenFile(string path)
         // Interactive pager mode (default)
         List<string> headerLines;
         List<string> contentLines;
-        if (isJsonl)
+        if (isEval)
+        {
+            var parsed = ParseEvalData(path);
+            if (parsed is null) return PagerAction.Quit;
+            headerLines = RenderEvalHeaderLines(parsed);
+            contentLines = RenderEvalContentLines(parsed, filterType, expandTools);
+            return RunInteractivePager(headerLines, contentLines, parsed, isJsonlFormat: true, noFollow: noFollow);
+        }
+        else if (isJsonl)
         {
             var parsed = isClaude ? ParseClaudeData(path) : ParseJsonlData(path);
             if (parsed is null) return PagerAction.Quit;
@@ -1117,6 +1142,238 @@ bool IsClaudeFormat(string path)
     }
     catch { }
     return false;
+}
+
+bool IsEvalFormat(string path)
+{
+    try
+    {
+        var firstLine = File.ReadLines(path).FirstOrDefault(l => !string.IsNullOrWhiteSpace(l));
+        if (firstLine is null) return false;
+        var doc = JsonDocument.Parse(firstLine);
+        var root = doc.RootElement;
+        return SafeGetString(root, "type") == "eval.start" && root.TryGetProperty("seq", out _);
+    }
+    catch { return false; }
+}
+
+EvalData? ParseEvalData(string path)
+{
+    var eval = new EvalData();
+    EvalCaseResult? current = null;
+
+    foreach (var line in File.ReadLines(path))
+    {
+        if (string.IsNullOrWhiteSpace(line)) continue;
+        JsonDocument doc;
+        try { doc = JsonDocument.Parse(line); }
+        catch { continue; }
+
+        var root = doc.RootElement;
+        var evType = SafeGetString(root, "type");
+        var data = root.TryGetProperty("data", out var d) ? d : default;
+        if (data.ValueKind == JsonValueKind.Undefined) continue;
+
+        switch (evType)
+        {
+            case "eval.start":
+                eval.Suite = SafeGetString(data, "suite");
+                eval.Description = SafeGetString(data, "description");
+                if (data.TryGetProperty("case_count", out var cc) && cc.TryGetInt32(out var ccv))
+                    eval.CaseCount = ccv;
+                break;
+
+            case "case.start":
+                current = new EvalCaseResult
+                {
+                    Name = SafeGetString(data, "case"),
+                    Prompt = SafeGetString(data, "prompt")
+                };
+                eval.CurrentCase = current.Name;
+                eval.Cases.Add(current);
+                break;
+
+            case "message":
+                if (current is not null)
+                    current.MessageAccumulator.Append(SafeGetString(data, "content"));
+                break;
+
+            case "tool.start":
+                if (current is not null)
+                {
+                    var toolName = SafeGetString(data, "tool_name");
+                    var toolId = SafeGetString(data, "tool_call_id");
+                    var tsStr = SafeGetString(root, "ts");
+                    if (DateTimeOffset.TryParse(tsStr, CultureInfo.InvariantCulture, DateTimeStyles.None, out var toolTs))
+                        current.PendingTools[toolId] = toolTs;
+                    if (!current.ToolsUsed.Contains(toolName))
+                        current.ToolsUsed.Add(toolName);
+                }
+                break;
+
+            case "tool.complete":
+                if (current is not null)
+                {
+                    var tcName = SafeGetString(data, "tool_name");
+                    var tcId = SafeGetString(data, "tool_call_id");
+                    double durMs = 0;
+                    if (data.TryGetProperty("duration_ms", out var dur))
+                        dur.TryGetDouble(out durMs);
+                    current.ToolEvents.Add((tcName, tcId, durMs));
+                    current.PendingTools.Remove(tcId);
+                }
+                break;
+
+            case "assertion.result":
+                if (current is not null)
+                {
+                    var fb = SafeGetString(data, "feedback");
+                    current.AssertionFeedback = string.IsNullOrEmpty(current.AssertionFeedback)
+                        ? fb : current.AssertionFeedback + "; " + fb;
+                }
+                break;
+
+            case "case.complete":
+                if (current is not null)
+                {
+                    if (data.TryGetProperty("passed", out var p))
+                        current.Passed = p.GetBoolean();
+                    if (data.TryGetProperty("duration_ms", out var dm))
+                    { dm.TryGetDouble(out var dmv2); current.DurationMs = dmv2; }
+                    if (data.TryGetProperty("tool_call_count", out var tcc) && tcc.TryGetInt32(out var tccv))
+                        current.ToolCallCount = tccv;
+                    if (data.TryGetProperty("response_length", out var rl) && rl.TryGetInt32(out var rlv))
+                        current.ResponseLength = rlv;
+                }
+                eval.CurrentCase = null;
+                current = null;
+                break;
+
+            case "eval.complete":
+                if (data.TryGetProperty("passed", out var ep) && ep.TryGetInt32(out var epv))
+                    eval.TotalPassed = epv;
+                if (data.TryGetProperty("failed", out var ef) && ef.TryGetInt32(out var efv))
+                    eval.TotalFailed = efv;
+                if (data.TryGetProperty("skipped", out var es) && es.TryGetInt32(out var esv))
+                    eval.TotalSkipped = esv;
+                if (data.TryGetProperty("total_duration_ms", out var etd))
+                { etd.TryGetDouble(out var etdv2); eval.TotalDurationMs = etdv2; }
+                if (data.TryGetProperty("total_tool_calls", out var etc2) && etc2.TryGetInt32(out var etc2v))
+                    eval.TotalToolCalls = etc2v;
+                break;
+
+            case "error":
+                if (current is not null)
+                    current.Error = SafeGetString(data, "message");
+                break;
+        }
+    }
+
+    // If eval.complete wasn't emitted, compute from cases
+    if (eval.TotalPassed == 0 && eval.TotalFailed == 0 && eval.Cases.Count > 0)
+    {
+        eval.TotalPassed = eval.Cases.Count(c => c.Passed == true);
+        eval.TotalFailed = eval.Cases.Count(c => c.Passed == false);
+        eval.TotalDurationMs = eval.Cases.Sum(c => c.DurationMs);
+        eval.TotalToolCalls = eval.Cases.Sum(c => c.ToolCallCount);
+    }
+
+    return eval.Cases.Count > 0 || eval.Suite.Length > 0 ? eval : null;
+}
+
+void ProcessEvalEvent(EvalData eval, string line)
+{
+    JsonDocument doc;
+    try { doc = JsonDocument.Parse(line); }
+    catch { return; }
+
+    var root = doc.RootElement;
+    var evType = SafeGetString(root, "type");
+    var data = root.TryGetProperty("data", out var d) ? d : default;
+    if (data.ValueKind == JsonValueKind.Undefined) return;
+
+    var currentCase = eval.Cases.LastOrDefault(c => c.Name == eval.CurrentCase);
+
+    switch (evType)
+    {
+        case "case.start":
+            var newCase = new EvalCaseResult
+            {
+                Name = SafeGetString(data, "case"),
+                Prompt = SafeGetString(data, "prompt")
+            };
+            eval.CurrentCase = newCase.Name;
+            eval.Cases.Add(newCase);
+            break;
+
+        case "message":
+            currentCase?.MessageAccumulator.Append(SafeGetString(data, "content"));
+            break;
+
+        case "tool.start":
+            if (currentCase is not null)
+            {
+                var toolName = SafeGetString(data, "tool_name");
+                var toolId = SafeGetString(data, "tool_call_id");
+                if (!currentCase.ToolsUsed.Contains(toolName))
+                    currentCase.ToolsUsed.Add(toolName);
+            }
+            break;
+
+        case "tool.complete":
+            if (currentCase is not null)
+            {
+                var tcName = SafeGetString(data, "tool_name");
+                var tcId = SafeGetString(data, "tool_call_id");
+                double durMs = 0;
+                if (data.TryGetProperty("duration_ms", out var dur))
+                    dur.TryGetDouble(out durMs);
+                currentCase.ToolEvents.Add((tcName, tcId, durMs));
+            }
+            break;
+
+        case "assertion.result":
+            if (currentCase is not null)
+            {
+                var fb = SafeGetString(data, "feedback");
+                currentCase.AssertionFeedback = string.IsNullOrEmpty(currentCase.AssertionFeedback)
+                    ? fb : currentCase.AssertionFeedback + "; " + fb;
+            }
+            break;
+
+        case "case.complete":
+            if (currentCase is not null)
+            {
+                if (data.TryGetProperty("passed", out var p))
+                    currentCase.Passed = p.GetBoolean();
+                if (data.TryGetProperty("duration_ms", out var dm))
+                { dm.TryGetDouble(out var dmv3); currentCase.DurationMs = dmv3; }
+                if (data.TryGetProperty("tool_call_count", out var tcc) && tcc.TryGetInt32(out var tccv))
+                    currentCase.ToolCallCount = tccv;
+                if (data.TryGetProperty("response_length", out var rl) && rl.TryGetInt32(out var rlv))
+                    currentCase.ResponseLength = rlv;
+            }
+            eval.CurrentCase = null;
+            break;
+
+        case "eval.complete":
+            if (data.TryGetProperty("passed", out var ep) && ep.TryGetInt32(out var epv))
+                eval.TotalPassed = epv;
+            if (data.TryGetProperty("failed", out var ef) && ef.TryGetInt32(out var efv))
+                eval.TotalFailed = efv;
+            if (data.TryGetProperty("skipped", out var es) && es.TryGetInt32(out var esv))
+                eval.TotalSkipped = esv;
+            if (data.TryGetProperty("total_duration_ms", out var etd))
+            { etd.TryGetDouble(out var etdv3); eval.TotalDurationMs = etdv3; }
+            if (data.TryGetProperty("total_tool_calls", out var etc2) && etc2.TryGetInt32(out var etc2v))
+                eval.TotalToolCalls = etc2v;
+            break;
+
+        case "error":
+            if (currentCase is not null)
+                currentCase.Error = SafeGetString(data, "message");
+            break;
+    }
 }
 
 JsonlData? ParseClaudeData(string path)
@@ -1460,6 +1717,219 @@ List<string> RenderJsonlHeaderLines(JsonlData d)
     lines.Add(bot);
     lines.Add("");
     return lines;
+}
+
+string BuildEvalInfoBar(EvalData d)
+{
+    var passed = d.TotalPassed > 0 ? $"✅{d.TotalPassed}" : "";
+    var failed = d.TotalFailed > 0 ? $" ❌{d.TotalFailed}" : "";
+    var skipped = d.TotalSkipped > 0 ? $" ⏭{d.TotalSkipped}" : "";
+    var inProgress = d.CurrentCase is not null ? $" ⏳{d.CurrentCase}" : "";
+    var dur = d.TotalDurationMs > 0 ? $" {d.TotalDurationMs / 1000.0:F1}s" : "";
+    return $" {d.Suite} {passed}{failed}{skipped}{inProgress}{dur}";
+}
+
+List<string> RenderEvalHeaderLines(EvalData d)
+{
+    List<string> lines = [];
+    int boxWidth = Math.Max(40, AnsiConsole.Profile.Width);
+    int inner = boxWidth - 2;
+    string top = Bold(Cyan("╭" + new string('─', inner) + "╮"));
+    string mid = Bold(Cyan("├" + new string('─', inner) + "┤"));
+    string bot = Bold(Cyan("╰" + new string('─', inner) + "╯"));
+    string Row(string content) => Bold(Cyan("│")) + PadVisible(content, inner) + Bold(Cyan("│"));
+
+    lines.Add("");
+    lines.Add(top);
+    lines.Add(Row(Bold("  📋 Eval Suite: " + d.Suite)));
+    lines.Add(mid);
+    if (d.Description != "") lines.Add(Row($"  {Dim(d.Description.TrimEnd())}"));
+    lines.Add(Row($"  Cases:    {Bold(d.Cases.Count.ToString())}/{d.CaseCount}  " +
+        $"{Green("✅" + d.TotalPassed)} {Red("❌" + d.TotalFailed)} {Dim("⏭" + d.TotalSkipped)}"));
+    if (d.TotalDurationMs > 0)
+        lines.Add(Row($"  Duration: {Bold($"{d.TotalDurationMs / 1000.0:F1}s")}  Tools: {d.TotalToolCalls}"));
+    lines.Add(bot);
+    lines.Add("");
+    return lines;
+}
+
+List<string> RenderEvalContentLines(EvalData d, string? filter, bool expandTool)
+{
+    List<string> lines = [];
+
+    for (int i = 0; i < d.Cases.Count; i++)
+    {
+        var c = d.Cases[i];
+        var badge = c.Passed switch
+        {
+            true => Green("✅ PASS"),
+            false => Red("❌ FAIL"),
+            null => Yellow("⏳ RUNNING")
+        };
+        var durStr = c.DurationMs > 0 ? Dim($" ({c.DurationMs / 1000.0:F1}s)") : "";
+
+        lines.Add(Bold($"━━━ Case {i + 1}: {c.Name} {badge}{durStr}"));
+        lines.Add("");
+
+        // Prompt
+        lines.Add(Dim("  Prompt:"));
+        foreach (var pl in SplitLines(c.Prompt))
+            lines.Add(Cyan("    " + pl));
+        lines.Add("");
+
+        // Tool calls
+        if (c.ToolEvents.Count > 0 || c.ToolsUsed.Count > 0)
+        {
+            lines.Add(Dim($"  Tools ({c.ToolCallCount}):"));
+            if (expandTool || c.ToolEvents.Count <= 6)
+            {
+                foreach (var (tool, id, dur) in c.ToolEvents)
+                    lines.Add($"    {Yellow("⚡")} {tool} {Dim($"({dur:F0}ms)")}");
+            }
+            else
+            {
+                lines.Add($"    {string.Join(", ", c.ToolsUsed.Select(t => Yellow(t)))}");
+            }
+            lines.Add("");
+        }
+
+        // Response
+        var response = c.MessageAccumulator.ToString();
+        if (response.Length > 0)
+        {
+            if (filter is not null && !response.Contains(filter, StringComparison.OrdinalIgnoreCase))
+            {
+                lines.Add(Dim($"  Response: ({response.Length} chars) [filtered out]"));
+            }
+            else
+            {
+                lines.Add(Dim("  Response:"));
+                var respLines = SplitLines(response);
+                var maxLines = expandTool ? respLines.Length : Math.Min(respLines.Length, 20);
+                for (int j = 0; j < maxLines; j++)
+                    lines.Add("    " + respLines[j]);
+                if (maxLines < respLines.Length)
+                    lines.Add(Dim($"    ... ({respLines.Length - maxLines} more lines, press 't' to expand)"));
+            }
+            lines.Add("");
+        }
+
+        // Assertion feedback
+        if (c.AssertionFeedback is not null)
+        {
+            lines.Add(c.Passed == true
+                ? Green($"  Assertion: {c.AssertionFeedback}")
+                : Red($"  Assertion: {c.AssertionFeedback}"));
+            lines.Add("");
+        }
+
+        // Error
+        if (c.Error is not null)
+        {
+            lines.Add(Red($"  ⚠ Error: {c.Error}"));
+            lines.Add("");
+        }
+    }
+
+    return lines;
+}
+
+void StreamEvalEvents(string path)
+{
+    foreach (var line in File.ReadLines(path))
+    {
+        if (string.IsNullOrWhiteSpace(line)) continue;
+        JsonDocument doc;
+        try { doc = JsonDocument.Parse(line); }
+        catch { continue; }
+
+        var root = doc.RootElement;
+        var evType = SafeGetString(root, "type");
+        var data = root.TryGetProperty("data", out var d) ? d : default;
+        var ts = SafeGetString(root, "ts");
+        var timeStr = ts.Length > 19 ? ts[11..19] : ts;
+
+        switch (evType)
+        {
+            case "eval.start":
+                Console.WriteLine($"\n{Bold(Cyan($"📋 Eval Suite: {SafeGetString(data, "suite")}"))} ({SafeGetString(data, "case_count")} cases)");
+                break;
+            case "case.start":
+                Console.WriteLine($"\n{Bold($"━━━ {SafeGetString(data, "case")}")} {Dim(timeStr)}");
+                Console.WriteLine(Dim($"    Prompt: {SafeGetString(data, "prompt")[..Math.Min(100, SafeGetString(data, "prompt").Length)]}..."));
+                break;
+            case "tool.start":
+                Console.Write($"    {Yellow("⚡")} {SafeGetString(data, "tool_name")}");
+                break;
+            case "tool.complete":
+                Console.WriteLine(Dim($" ({SafeGetString(data, "duration_ms")}ms)"));
+                break;
+            case "assertion.result":
+                var apassed = data.TryGetProperty("passed", out var ap) && ap.GetBoolean();
+                Console.WriteLine(apassed
+                    ? Green($"    ✅ {SafeGetString(data, "feedback")}")
+                    : Red($"    ❌ {SafeGetString(data, "feedback")}"));
+                break;
+            case "case.complete":
+                var cpassed = data.TryGetProperty("passed", out var cp) && cp.GetBoolean();
+                var cdur = data.TryGetProperty("duration_ms", out var cd) ? cd.GetDouble() : 0;
+                Console.WriteLine(cpassed
+                    ? Green($"  ✅ PASS ({cdur / 1000.0:F1}s)")
+                    : Red($"  ❌ FAIL ({cdur / 1000.0:F1}s)"));
+                break;
+            case "eval.complete":
+                var ep2 = data.TryGetProperty("passed", out var ep2v) ? ep2v.GetInt32() : 0;
+                var ef2 = data.TryGetProperty("failed", out var ef2v) ? ef2v.GetInt32() : 0;
+                Console.WriteLine($"\n{Bold("Results:")} {Green($"✅{ep2}")} {Red($"❌{ef2}")}");
+                break;
+            case "error":
+                Console.WriteLine(Red($"  ⚠ {SafeGetString(data, "message")}"));
+                break;
+        }
+    }
+}
+
+void OutputEvalSummary(EvalData d, bool asJson)
+{
+    if (asJson)
+    {
+        var summary = new
+        {
+            suite = d.Suite,
+            description = d.Description,
+            cases = d.Cases.Select(c => new
+            {
+                name = c.Name,
+                passed = c.Passed,
+                duration_ms = c.DurationMs,
+                tool_calls = c.ToolCallCount,
+                tools = c.ToolsUsed,
+                response_length = c.ResponseLength,
+                feedback = c.AssertionFeedback,
+                error = c.Error
+            }),
+            total_passed = d.TotalPassed,
+            total_failed = d.TotalFailed,
+            total_skipped = d.TotalSkipped,
+            total_duration_ms = d.TotalDurationMs,
+            total_tool_calls = d.TotalToolCalls
+        };
+        Console.WriteLine(JsonSerializer.Serialize(summary, SummarySerializerOptions));
+    }
+    else
+    {
+        Console.WriteLine($"\n📋 Eval Suite: {d.Suite}");
+        if (d.Description != "") Console.WriteLine($"   {d.Description.TrimEnd()}");
+        Console.WriteLine($"   Results: ✅{d.TotalPassed} ❌{d.TotalFailed} ⏭{d.TotalSkipped}");
+        Console.WriteLine($"   Duration: {d.TotalDurationMs / 1000.0:F1}s  Tools: {d.TotalToolCalls}");
+        Console.WriteLine();
+        foreach (var c in d.Cases)
+        {
+            var badge = c.Passed == true ? "✅" : c.Passed == false ? "❌" : "⏳";
+            Console.WriteLine($"   {badge} {c.Name} ({c.DurationMs / 1000.0:F1}s, {c.ToolCallCount} tools)");
+            if (c.Error is not null) Console.WriteLine($"      Error: {c.Error}");
+        }
+    }
 }
 
 List<string> RenderWazaHeaderLines(WazaData d)
@@ -1836,6 +2306,8 @@ PagerAction RunInteractivePager<T>(List<string> headerLines, List<string> conten
     string infoBar;
     if (parsedData is JsonlData jData)
         infoBar = BuildJsonlInfoBar(jData) + (following ? " ↓ FOLLOWING" : "");
+    else if (parsedData is EvalData eData)
+        infoBar = BuildEvalInfoBar(eData) + (following ? " ↓ FOLLOWING" : "");
     else if (parsedData is WazaData wData)
         infoBar = BuildWazaInfoBar(wData);
     else
@@ -1881,6 +2353,8 @@ PagerAction RunInteractivePager<T>(List<string> headerLines, List<string> conten
         var filter = filterIndex == 0 ? null : filterCycle[filterIndex];
         if (parsedData is JsonlData jd)
             contentLines = RenderJsonlContentLines(jd, filter, currentExpandTools);
+        else if (parsedData is EvalData ed)
+            contentLines = RenderEvalContentLines(ed, filter, currentExpandTools);
         else if (parsedData is WazaData wd)
             contentLines = RenderWazaContentLines(wd, filter, currentExpandTools);
         if (searchPattern is not null)
@@ -2154,6 +2628,34 @@ PagerAction RunInteractivePager<T>(List<string> headerLines, List<string> conten
                                 Render();
                             }
                         }
+                        else if (fi.Length > lastFileOffset && parsedData is EvalData edFollow)
+                        {
+                            List<string> newLines = [];
+                            using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                            {
+                                fs.Seek(lastFileOffset, SeekOrigin.Begin);
+                                using var sr = new StreamReader(fs, Encoding.UTF8);
+                                string? line;
+                                while ((line = sr.ReadLine()) != null)
+                                {
+                                    if (!string.IsNullOrWhiteSpace(line))
+                                        newLines.Add(line);
+                                }
+                                lastFileOffset = fs.Position;
+                            }
+
+                            if (newLines.Count > 0)
+                            {
+                                bool wasAtBottom = scrollOffset >= Math.Max(0, contentLines.Count - ViewportHeight());
+                                foreach (var rawLine in newLines)
+                                    ProcessEvalEvent(edFollow, rawLine);
+                                RebuildContent();
+                                infoBar = BuildEvalInfoBar(edFollow) + " ↓ FOLLOWING";
+                                if (wasAtBottom && userAtBottom)
+                                    scrollOffset = Math.Max(0, contentLines.Count - ViewportHeight());
+                                Render();
+                            }
+                        }
                     }
                     catch { /* ignore read errors, will retry on next change */ }
                 }
@@ -2171,6 +2673,8 @@ PagerAction RunInteractivePager<T>(List<string> headerLines, List<string> conten
                     // Rebuild header/content since header boxes are now width-dependent
                     if (parsedData is JsonlData jdResize)
                         headerLines = RenderJsonlHeaderLines(jdResize);
+                    else if (parsedData is EvalData edResize)
+                        headerLines = RenderEvalHeaderLines(edResize);
                     else if (parsedData is WazaData wdResize)
                         headerLines = RenderWazaHeaderLines(wdResize);
                     RebuildContent();
@@ -3086,7 +3590,8 @@ string FormatFileSize(long bytes)
     if (bytes < 1024 * 1024) return $"{bytes / 1024}KB";
     return $"{bytes / (1024 * 1024.0):F1}MB";
 }
-
+
+
 // ========== JSON and Summary Output Modes ==========
 
 void OutputJsonl(JsonlData d, string? filter, bool expandTool)
@@ -3407,7 +3912,37 @@ FileStats? ExtractStats(string filePath)
         bool isClaude = false;
         if (isJsonl && IsClaudeFormat(filePath))
             isClaude = true;
-        
+
+        // Try Eval JSONL format
+        if (isJsonl && !isClaude && IsEvalFormat(filePath))
+        {
+            var evalData = ParseEvalData(filePath);
+            if (evalData is not null)
+            {
+                var toolUsage = new Dictionary<string, int>();
+                foreach (var c in evalData.Cases)
+                    foreach (var t in c.ToolsUsed)
+                        toolUsage[t] = toolUsage.GetValueOrDefault(t) + 1;
+
+                return new FileStats(
+                    FilePath: filePath,
+                    Format: "eval",
+                    Model: null,
+                    TaskName: evalData.Suite,
+                    TaskId: null,
+                    Status: evalData.TotalFailed == 0 ? "passed" : "failed",
+                    TurnCount: evalData.Cases.Count,
+                    ToolCallCount: evalData.TotalToolCalls,
+                    ErrorCount: evalData.Cases.Count(c => c.Error is not null),
+                    DurationSeconds: evalData.TotalDurationMs / 1000.0,
+                    AggregateScore: evalData.Cases.Count > 0 ? (double)evalData.TotalPassed / evalData.Cases.Count : 0,
+                    Passed: evalData.TotalFailed == 0 && evalData.TotalPassed > 0,
+                    ToolUsage: toolUsage,
+                    Agent: null
+                );
+            }
+        }
+
         // Try Waza format first (JSON)
         if (!isJsonl)
         {
@@ -3797,6 +4332,36 @@ record WazaData(
     double DurationMs, int TotalTurns, int ToolCallCount, int TokensIn, int TokensOut,
     List<(string name, double score, bool passed, string feedback)> Validations,
     string ModelId = "", double AggregateScore = 0, string[] ToolsUsed = null!);
+
+class EvalCaseResult
+{
+    public string Name { get; set; } = "";
+    public string Prompt { get; set; } = "";
+    public bool? Passed { get; set; }
+    public double DurationMs { get; set; }
+    public int ToolCallCount { get; set; }
+    public List<string> ToolsUsed { get; set; } = [];
+    public int ResponseLength { get; set; }
+    public string? AssertionFeedback { get; set; }
+    public string? Error { get; set; }
+    public StringBuilder MessageAccumulator { get; } = new();
+    public List<(string tool, string id, double durationMs)> ToolEvents { get; set; } = [];
+    public Dictionary<string, DateTimeOffset> PendingTools { get; } = new();
+}
+
+class EvalData
+{
+    public string Suite { get; set; } = "";
+    public string Description { get; set; } = "";
+    public int CaseCount { get; set; }
+    public List<EvalCaseResult> Cases { get; set; } = [];
+    public int TotalPassed { get; set; }
+    public int TotalFailed { get; set; }
+    public int TotalSkipped { get; set; }
+    public double TotalDurationMs { get; set; }
+    public int TotalToolCalls { get; set; }
+    public string? CurrentCase { get; set; }
+}
 
 enum PagerAction { Quit, Browse, Resume }
 
