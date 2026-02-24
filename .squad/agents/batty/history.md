@@ -43,3 +43,24 @@
 - **Key constraint preserved**: All local functions in replay.cs capture top-level variables (noColor, expandTools, full, filterType, tail, markdownPipeline, etc.). Extracting them to classes requires threading a shared options object through all call sites — deferred to a follow-up iteration.
 - **Decision**: Incremental > perfect. The csproj conversion is the structural foundation. Further splitting (MarkdownRenderer, ContentRenderer, SessionBrowser, etc.) can follow incrementally now that the project structure supports multiple files.
 - All 67 tests pass after conversion.
+
+### 2025-02-24: ColorHelper extraction complete
+- **Fixed 19 build errors** from interrupted ColorHelper migration on `refactor/csproj-split` branch:
+  - Added `using Spectre.Console;` to ContentRenderer.cs (3 AnsiConsole references)
+  - Replaced captured `full` variable with `colors.Full` in ContentRenderer (lines 419, 529)
+  - Fixed replay.cs constructor: `new MarkdownRenderer(noColor)` and `new ContentRenderer(colors, mdRenderer)`
+  - Replaced all `SummarySerializerOptions` → `ColorHelper.SummarySerializer` (5 occurrences)
+  - Replaced all `JsonlSerializerOptions` → `ColorHelper.JsonlSerializer` (5 occurrences)
+- **Display width bug fixes** for CJK/emoji support:
+  - MarkdownRenderer: Changed table column width calculations from `.Length` to `VisibleWidth()` (lines 191, 200)
+  - replay.cs session browser: Changed truncation from string slicing to `TruncateToWidth()` and length checks to `VisibleWidth()` (line 2011)
+- Build now succeeds with only the pre-existing CS0162 warning (unreachable code).
+- **Pattern learned:** When extracting helpers that hold serializer options, all JsonSerializer.Serialize() call sites must be updated to reference the static property (e.g., `ColorHelper.SummarySerializer`).
+
+### 2025-02-24: StatsAnalyzer extraction complete
+- **Extracted StatsAnalyzer.cs**: Moved `ExtractStats` and `OutputStatsReport` functions from replay.cs into new StatsAnalyzer class.
+- **Design**: Primary constructor takes `ColorHelper colors` (not used directly, but preserved for future use) and three function delegates for parsing (`parseJsonlData`, `parseClaudeData`, `parseWazaData`). These parsing functions remain as top-level local functions in replay.cs since they capture variables.
+- **Pattern**: When extracting functions that depend on other local functions, pass them as delegates rather than extracting them too (incremental refactoring).
+- **Updated replay.cs**: Created `statsAnalyzer` instance after `colors` initialization (~line 100), replaced all `ExtractStats` and `OutputStatsReport` call sites (3 locations total) with `statsAnalyzer.Method()`, and removed the original 350+ line function definitions.
+- Build succeeds with CS9113 warning (unread parameter `colors`) — acceptable since it's captured for future use. No functionality changes.
+
