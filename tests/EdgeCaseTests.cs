@@ -30,7 +30,7 @@ public class EdgeCaseTests
         var doc = JsonDocument.Parse(output);
         var toolsUsed = doc.RootElement.GetProperty("tools_used");
         Assert.Equal(JsonValueKind.Object, toolsUsed.ValueKind);
-        Assert.Equal(0, toolsUsed.EnumerateObject().Count());
+        Assert.Empty(toolsUsed.EnumerateObject());
     }
 
     [Fact]
