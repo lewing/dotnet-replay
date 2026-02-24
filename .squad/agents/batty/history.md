@@ -78,4 +78,12 @@
 - **Result**: replay.cs reduced from ~2,027 lines to 1,410 lines. Build succeeds with CS9113 warnings (unread parameters `colors` and `tail` — preserved for future use). All 67 tests pass.
 - **Pattern**: Terminal UI code with stateful loops can be extracted to classes while keeping local function closures inside the main method to avoid threading shared state through every helper.
 
+### 2025-02-24: SessionBrowser extraction complete
+- **Extracted SessionBrowser.cs**: Moved `BrowseSessions`, `LoadSessionsFromDb`, and `LaunchResume` methods (~650 lines) from replay.cs into a new SessionBrowser class.
+- **Design**: Primary constructor with dependencies: `ColorHelper colors`, `ContentRenderer cr`, `DataParsers dataParsers`, `string? sessionStateDir`. The `sessionStateDir` parameter is received from replay.cs constructor-level initialization and passed through to the browser.
+- **Architecture**: Class uses internal visibility (like all other helper classes) because its dependencies are internal. Methods: `BrowseSessions(string? dbPathOverride = null)`, `LoadSessionsFromDb(...)` (helper), and `LaunchResume(string sessionPath)` for launching copilot/claude CLI.
+- **Dependencies**: Uses TextUtils functions (FormatAge, FormatFileSize, StripMarkup, TruncateMarkupToWidth, GetVisibleText, VisibleWidth, TruncateToWidth), EvalProcessor.IsClaudeFormat, and System.Threading.Lock for thread-safe session list access.
+- **Updated replay.cs**: Created `sessionBrowser` instance after `dataParsers` initialization (~line 104), updated 6 call sites (`sessionBrowser.BrowseSessions()`, `sessionBrowser.LaunchResume(filePath!)`), and removed the original ~700 lines of browser code (lines 426-483 for LaunchResume, 585-652 for LoadSessionsFromDb, 654-1280 for BrowseSessions).
+- **Result**: replay.cs reduced from ~1,410 lines to ~740 lines. Build succeeds with 6 CS9113 warnings (all pre-existing unread parameter warnings in various helper classes). All 67 tests pass (120.5s test execution time).
+- **Pattern**: Large TUI components (session browser with DB polling, background threads, throttled rendering) can be cleanly extracted with primary constructors capturing dependencies while leaving utility functions in their original locations (TextUtils, EvalProcessor).
 
