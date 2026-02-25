@@ -107,7 +107,7 @@ var sessionBrowser = new SessionBrowser(cr, dataParsers, sessionStateDir);
 // --- Stats command dispatch ---
 if (cliArgs.Length > 0 && cliArgs[0] == "stats")
 {
-    var statsFilePaths = new List<string>();
+    List<string> statsFilePaths = [];
     string? groupBy = null;
     string? filterModel = null;
     string? filterTask = null;
@@ -151,7 +151,7 @@ if (cliArgs.Length > 0 && cliArgs[0] == "stats")
     }
     
     // Expand globs and collect all files
-    var allFiles = new List<string>();
+    List<string> allFiles = [];
     foreach (var pattern in statsFilePaths)
     {
         var expanded = ExpandGlob(pattern);
@@ -174,16 +174,16 @@ if (cliArgs.Length > 0 && cliArgs[0] == "stats")
     }
     
     // Process each file and extract stats
-    var allStats = new List<FileStats>();
+    List<FileStats> allStats = [];
     foreach (var file in allFiles)
     {
         var stats = statsAnalyzer.ExtractStats(file);
-        if (stats != null)
+        if (stats is not null)
         {
             // Apply filters
-            if (filterModel != null && !string.Equals(stats.Model, filterModel, StringComparison.OrdinalIgnoreCase))
+            if (filterModel is not null && !string.Equals(stats.Model, filterModel, StringComparison.OrdinalIgnoreCase))
                 continue;
-            if (filterTask != null && !string.Equals(stats.TaskName, filterTask, StringComparison.OrdinalIgnoreCase))
+            if (filterTask is not null && !string.Equals(stats.TaskName, filterTask, StringComparison.OrdinalIgnoreCase))
                 continue;
             allStats.Add(stats);
         }
@@ -510,9 +510,10 @@ void OutputEvalSummary(EvalData d, bool asJson)
     {
         Console.WriteLine($"\n📋 Eval Suite: {d.Suite}");
         if (d.Description != "") Console.WriteLine($"   {d.Description.TrimEnd()}");
-        Console.WriteLine($"   Results: ✅{d.TotalPassed} ❌{d.TotalFailed} ⏭{d.TotalSkipped}");
-        Console.WriteLine($"   Duration: {d.TotalDurationMs / 1000.0:F1}s  Tools: {d.TotalToolCalls}");
-        Console.WriteLine();
+        Console.WriteLine($"""
+                   Results: ✅{d.TotalPassed} ❌{d.TotalFailed} ⏭{d.TotalSkipped}
+                   Duration: {d.TotalDurationMs / 1000.0:F1}s  Tools: {d.TotalToolCalls}
+                """);
         foreach (var c in d.Cases)
         {
             var badge = c.Passed == true ? "✅" : c.Passed == false ? "❌" : "⏳";

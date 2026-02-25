@@ -259,13 +259,13 @@ static class TextUtils
         return padding > 0 ? s + new string(' ', padding) : s;
     }
 
-    public static string FormatRelativeTime(TimeSpan ts)
+    public static string FormatRelativeTime(TimeSpan ts) => ts switch
     {
-        if (ts.TotalSeconds < 0.1) return "+0.0s";
-        if (ts.TotalMinutes < 1) return $"+{ts.TotalSeconds:F1}s";
-        if (ts.TotalHours < 1) return $"+{(int)ts.TotalMinutes}m {ts.Seconds}s";
-        return $"+{(int)ts.TotalHours}h {ts.Minutes}m";
-    }
+        { TotalSeconds: < 0.1 } => "+0.0s",
+        { TotalMinutes: < 1 } => $"+{ts.TotalSeconds:F1}s",
+        { TotalHours: < 1 } => $"+{(int)ts.TotalMinutes}m {ts.Seconds}s",
+        _ => $"+{(int)ts.TotalHours}h {ts.Minutes}m"
+    };
 
     public static string ExtractContentString(JsonElement el)
     {
@@ -293,34 +293,32 @@ static class TextUtils
         return "";
     }
 
-    public static string FormatAge(TimeSpan age)
+    public static string FormatAge(TimeSpan age) => age switch
     {
-        if (age.TotalMinutes < 1) return "now";
-        if (age.TotalHours < 1) return $"{(int)age.TotalMinutes}m";
-        if (age.TotalDays < 1) return $"{(int)age.TotalHours}h";
-        if (age.TotalDays < 30) return $"{(int)age.TotalDays}d";
-        return $"{(int)(age.TotalDays / 30)}mo";
-    }
+        { TotalMinutes: < 1 } => "now",
+        { TotalHours: < 1 } => $"{(int)age.TotalMinutes}m",
+        { TotalDays: < 1 } => $"{(int)age.TotalHours}h",
+        { TotalDays: < 30 } => $"{(int)age.TotalDays}d",
+        _ => $"{(int)(age.TotalDays / 30)}mo"
+    };
 
-    public static string FormatFileSize(long bytes)
+    public static string FormatFileSize(long bytes) => bytes switch
     {
-        if (bytes < 1024) return $"{bytes}B";
-        if (bytes < 1024 * 1024) return $"{bytes / 1024}KB";
-        return $"{bytes / (1024 * 1024.0):F1}MB";
-    }
+        < 1024 => $"{bytes}B",
+        < 1024 * 1024 => $"{bytes / 1024}KB",
+        _ => $"{bytes / (1024 * 1024.0):F1}MB"
+    };
 
-    public static string FormatDuration(TimeSpan ts)
+    public static string FormatDuration(TimeSpan ts) => ts switch
     {
-        if (ts.TotalSeconds < 60)
-            return $"{(int)ts.TotalSeconds}s";
-        if (ts.TotalMinutes < 60)
-            return $"{(int)ts.TotalMinutes}m {ts.Seconds}s";
-        return $"{(int)ts.TotalHours}h {ts.Minutes}m";
-    }
+        { TotalSeconds: < 60 } => $"{(int)ts.TotalSeconds}s",
+        { TotalMinutes: < 60 } => $"{(int)ts.TotalMinutes}m {ts.Seconds}s",
+        _ => $"{(int)ts.TotalHours}h {ts.Minutes}m"
+    };
 
     public static List<string> ExpandGlob(string pattern)
     {
-        var result = new List<string>();
+        List<string> result = [];
 
         // Check if pattern contains wildcards
         if (!pattern.Contains('*') && !pattern.Contains('?'))

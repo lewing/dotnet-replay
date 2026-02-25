@@ -37,15 +37,13 @@ class InteractivePager(ContentRenderer cr, bool noColor, string? filePath, strin
         bool needsFullClear = true; // first render does a full clear
 
         // Build compact info bar
-        string infoBar;
-        if (parsedData is JsonlData jData)
-            infoBar = cr!.BuildJsonlInfoBar(jData) + (following ? " ↓ FOLLOWING" : "");
-        else if (parsedData is EvalData eData)
-            infoBar = cr!.BuildEvalInfoBar(eData) + (following ? " ↓ FOLLOWING" : "");
-        else if (parsedData is WazaData wData)
-            infoBar = cr!.BuildWazaInfoBar(wData, filePath ?? "");
-        else
-            infoBar = $"[{Path.GetFileName(filePath)}]";
+        string infoBar = parsedData switch
+        {
+            JsonlData jData => cr!.BuildJsonlInfoBar(jData) + (following ? " ↓ FOLLOWING" : ""),
+            EvalData eData => cr!.BuildEvalInfoBar(eData) + (following ? " ↓ FOLLOWING" : ""),
+            WazaData wData => cr!.BuildWazaInfoBar(wData, filePath ?? ""),
+            _ => $"[{Path.GetFileName(filePath)}]"
+        };
 
         string[] filterCycle = ["all", "user", "assistant", "tool", "error"];
         int filterIndex = currentFilter is null ? 0 : Array.IndexOf(filterCycle, currentFilter);
@@ -85,12 +83,13 @@ class InteractivePager(ContentRenderer cr, bool noColor, string? filePath, strin
         void RebuildContent()
         {
             var filter = filterIndex == 0 ? null : filterCycle[filterIndex];
-            if (parsedData is JsonlData jd)
-                contentLines = cr!.RenderJsonlContentLines(jd, filter, currentExpandTools);
-            else if (parsedData is EvalData ed)
-                contentLines = cr!.RenderEvalContentLines(ed, filter, currentExpandTools);
-            else if (parsedData is WazaData wd)
-                contentLines = cr!.RenderWazaContentLines(wd, filter, currentExpandTools);
+            contentLines = parsedData switch
+            {
+                JsonlData jd => cr!.RenderJsonlContentLines(jd, filter, currentExpandTools),
+                EvalData ed => cr!.RenderEvalContentLines(ed, filter, currentExpandTools),
+                WazaData wd => cr!.RenderWazaContentLines(wd, filter, currentExpandTools),
+                _ => contentLines
+            };
             if (searchPattern is not null)
                 RebuildSearchMatches();
             ClampScroll();
@@ -324,7 +323,7 @@ class InteractivePager(ContentRenderer cr, bool noColor, string? filePath, strin
                                     fs.Seek(lastFileOffset, SeekOrigin.Begin);
                                     using var sr = new StreamReader(fs, Encoding.UTF8);
                                     string? line;
-                                    while ((line = sr.ReadLine()) != null)
+                                    while ((line = sr.ReadLine()) is not null)
                                     {
                                         if (!string.IsNullOrWhiteSpace(line))
                                             newLines.Add(line);
@@ -370,7 +369,7 @@ class InteractivePager(ContentRenderer cr, bool noColor, string? filePath, strin
                                     fs.Seek(lastFileOffset, SeekOrigin.Begin);
                                     using var sr = new StreamReader(fs, Encoding.UTF8);
                                     string? line;
-                                    while ((line = sr.ReadLine()) != null)
+                                    while ((line = sr.ReadLine()) is not null)
                                     {
                                         if (!string.IsNullOrWhiteSpace(line))
                                             newLines.Add(line);
@@ -405,12 +404,13 @@ class InteractivePager(ContentRenderer cr, bool noColor, string? filePath, strin
                         lastWidth = curW;
                         lastHeight = curH;
                         // Rebuild header/content since header boxes are now width-dependent
-                        if (parsedData is JsonlData jdResize)
-                            headerLines = cr!.RenderJsonlHeaderLines(jdResize);
-                        else if (parsedData is EvalData edResize)
-                            headerLines = cr!.RenderEvalHeaderLines(edResize);
-                        else if (parsedData is WazaData wdResize)
-                            headerLines = cr!.RenderWazaHeaderLines(wdResize);
+                        headerLines = parsedData switch
+                        {
+                            JsonlData jdResize => cr!.RenderJsonlHeaderLines(jdResize),
+                            EvalData edResize => cr!.RenderEvalHeaderLines(edResize),
+                            WazaData wdResize => cr!.RenderWazaHeaderLines(wdResize),
+                            _ => headerLines
+                        };
                         RebuildContent();
                         needsFullClear = true;
                         Render();

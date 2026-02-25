@@ -32,11 +32,11 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
             }
 
             // Validate sessions table has expected columns
-            var expectedCols = new HashSet<string> { "id", "cwd", "summary", "updated_at", "branch", "repository" };
+            HashSet<string> expectedCols = ["id", "cwd", "summary", "updated_at", "branch", "repository"];
             using (var cmd = conn.CreateCommand())
             {
                 cmd.CommandText = "PRAGMA table_info(sessions)";
-                var actualCols = new HashSet<string>();
+                HashSet<string> actualCols = [];
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read()) actualCols.Add(reader.GetString(1));
                 if (!expectedCols.IsSubsetOf(actualCols)) return null;
@@ -98,10 +98,10 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
             // Try loading Copilot sessions from SQLite DB (fast path)
             var dbSessions = LoadSessionsFromDb(sessionStateDir!, dbPathOverride);
             string? dbPath = null;
-            var knownSessionIds = new HashSet<string>();
+            HashSet<string> knownSessionIds = [];
             DateTime lastUpdatedAt = DateTime.MinValue;
 
-            if (dbSessions != null)
+            if (dbSessions is not null)
             {
                 // Record the DB path for polling
                 dbPath = dbPathOverride ?? Path.Combine(Path.GetDirectoryName(sessionStateDir!)!, "session-store.db");
@@ -126,7 +126,7 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                     var eventsPath = Path.Combine(dir, "events.jsonl");
                     if (!File.Exists(yamlPath) || !File.Exists(eventsPath)) continue;
 
-                    var props = new Dictionary<string, string>();
+                    Dictionary<string, string> props = [];
                     try
                     {
                         foreach (var line in File.ReadLines(yamlPath))
@@ -219,7 +219,7 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
             scanComplete = true;
             
             // If we loaded from DB, poll for new sessions every 5 seconds
-            if (dbPath != null)
+            if (dbPath is not null)
             {
                 while (true)
                 {

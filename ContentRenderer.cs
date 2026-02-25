@@ -435,7 +435,7 @@ class ContentRenderer(ColorHelper colors, MarkdownRenderer mdRenderer)
         if (d.TranscriptItems.Length == 0) { lines.Add(Dim("  No events found")); return lines; }
 
         // Pre-scan: build tool_call_id → tool_name map from execution_start events
-        var toolCallNames = new Dictionary<string, string>();
+        Dictionary<string, string> toolCallNames = [];
         foreach (var ti in d.TranscriptItems)
         {
             if (SafeGetString(ti, "type").Equals("tool.execution_start", StringComparison.OrdinalIgnoreCase))

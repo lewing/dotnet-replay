@@ -29,7 +29,7 @@ class StatsAnalyzer(Func<string, JsonlData?> parseJsonlData, Func<string, JsonlD
                 var evalData = ParseEvalData(filePath);
                 if (evalData is not null)
                 {
-                    var toolUsage = new Dictionary<string, int>();
+                    Dictionary<string, int> toolUsage = [];
                     foreach (var c in evalData.Cases)
                         foreach (var t in c.ToolsUsed)
                             toolUsage[t] = toolUsage.GetValueOrDefault(t) + 1;
@@ -104,7 +104,7 @@ class StatsAnalyzer(Func<string, JsonlData?> parseJsonlData, Func<string, JsonlD
                 
                 // Extract stats using OutputSummary logic
                 int userMsgCount = 0, assistantMsgCount = 0, toolCallCount = 0, errorCount = 0;
-                var toolUsage = new Dictionary<string, int>();
+                Dictionary<string, int> toolUsage = [];
                 string agentName = "";
                 
                 foreach (var (type, root, ts) in jsonlData.Turns)
@@ -164,7 +164,7 @@ class StatsAnalyzer(Func<string, JsonlData?> parseJsonlData, Func<string, JsonlD
                 string? model = null;
                 if (!string.IsNullOrEmpty(agentName))
                 {
-                    var modelPatterns = new[] { "gpt-", "claude-", "sonnet-", "haiku-", "opus-" };
+                    string[] modelPatterns = ["gpt-", "claude-", "sonnet-", "haiku-", "opus-"];
                     foreach (var pattern in modelPatterns)
                     {
                         var idx = agentName.IndexOf(pattern, StringComparison.OrdinalIgnoreCase);
@@ -240,7 +240,7 @@ class StatsAnalyzer(Func<string, JsonlData?> parseJsonlData, Func<string, JsonlD
                 }).ToArray()
             };
             
-            if (groupBy != null)
+            if (groupBy is not null)
             {
                 if (groupBy == "model")
                 {

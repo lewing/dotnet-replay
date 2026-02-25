@@ -39,7 +39,7 @@ class OutputFormatters(bool full)
                 case "assistant.message":
                 {
                     var content = SafeGetString(data, "content");
-                    var toolCallNames = new List<string>();
+                    List<string> toolCallNames = [];
                     if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("toolRequests", out var toolReqs)
                         && toolReqs.ValueKind == JsonValueKind.Array)
                     {
@@ -122,8 +122,8 @@ class OutputFormatters(bool full)
     {
         // Calculate statistics
         int userMsgCount = 0, assistantMsgCount = 0, toolCallCount = 0, errorCount = 0;
-        var toolUsage = new Dictionary<string, int>();
-        var skillsInvoked = new HashSet<string>();
+        Dictionary<string, int> toolUsage = [];
+        HashSet<string> skillsInvoked = [];
         
         foreach (var (type, root, ts) in d.Turns)
         {
@@ -242,13 +242,15 @@ class OutputFormatters(bool full)
         }
         else
         {
-            Console.WriteLine($"Task: {d.TaskName} ({d.TaskId})");
-            Console.WriteLine($"Status: {d.Status}");
-            Console.WriteLine($"Duration: {FormatDuration(TimeSpan.FromMilliseconds(d.DurationMs))}");
-            Console.WriteLine($"Turns: {d.TotalTurns}, Tool calls: {d.ToolCallCount}");
-            Console.WriteLine($"Tokens: {d.TokensIn} in, {d.TokensOut} out ({d.TokensIn + d.TokensOut} total)");
-            Console.WriteLine($"Model: {d.ModelId}");
-            Console.WriteLine($"Score: {d.AggregateScore:F2}");
+            Console.WriteLine($"""
+                Task: {d.TaskName} ({d.TaskId})
+                Status: {d.Status}
+                Duration: {FormatDuration(TimeSpan.FromMilliseconds(d.DurationMs))}
+                Turns: {d.TotalTurns}, Tool calls: {d.ToolCallCount}
+                Tokens: {d.TokensIn} in, {d.TokensOut} out ({d.TokensIn + d.TokensOut} total)
+                Model: {d.ModelId}
+                Score: {d.AggregateScore:F2}
+                """);
             if (d.Validations.Count > 0)
             {
                 Console.WriteLine("Validations:");
