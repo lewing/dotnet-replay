@@ -30,7 +30,7 @@ public class EdgeCaseTests
         var doc = JsonDocument.Parse(output);
         var toolsUsed = doc.RootElement.GetProperty("tools_used");
         Assert.Equal(JsonValueKind.Object, toolsUsed.ValueKind);
-        Assert.Equal(0, toolsUsed.EnumerateObject().Count());
+        Assert.Empty(toolsUsed.EnumerateObject());
     }
 
     [Fact]
@@ -461,7 +461,7 @@ public class EdgeCaseTests
     }
 
     private static readonly string ReplayCs = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "replay.cs"));
+        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "dotnet-replay.csproj"));
 
     private string RunReplayWithArgs(string args)
     {
@@ -472,7 +472,7 @@ public class EdgeCaseTests
         var startInfo = new System.Diagnostics.ProcessStartInfo
         {
             FileName = "dotnet",
-            Arguments = $"run {ReplayCs} -- {args}",
+            Arguments = $"run --project {ReplayCs} -- {args}",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,

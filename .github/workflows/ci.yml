@@ -20,4 +20,6 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - name: Build
-        run: dotnet build replay.cs
+        run: dotnet build dotnet-replay.csproj
+      - name: Test
+        run: dotnet test tests/ReplayTests.csproj
