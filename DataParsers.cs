@@ -1,9 +1,26 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using static TextUtils;
 
 class DataParsers(int? tail)
 {
+    static readonly JsonSerializerOptions s_syntheticOptions = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
+    static JsonDocument MakeSyntheticTurn(object turn) =>
+        JsonDocument.Parse(JsonSerializer.Serialize(turn, s_syntheticOptions));
+
+    // Synthetic turn shapes used to normalize Claude events into Copilot JSONL format
+    record SyntheticContentTurn(string type, SyntheticContentData data);
+    record SyntheticContentData(string content, bool? queued = null);
+    record SyntheticToolStartTurn(string type, SyntheticToolStartData data);
+    record SyntheticToolStartData(string toolName, string toolUseId, JsonElement? arguments = null);
+    record SyntheticToolResultTurn(string type, SyntheticToolResultData data);
+    record SyntheticToolResultData(string toolUseId, SyntheticToolResult result);
+    record SyntheticToolResult(string content, string status);
     public JsonlData? ParseJsonlData(string path)
     {
         List<JsonDocument> events = [];
@@ -134,8 +151,8 @@ class DataParsers(int? tail)
                             var isError = block.TryGetProperty("is_error", out var ie) && ie.ValueKind == JsonValueKind.True;
                             var status = isError ? "error" : "success";
                             var toolUseId = SafeGetString(block, "tool_use_id");
-                            var syntheticJson = $"{{\"type\":\"tool.result\",\"data\":{{\"toolUseId\":{JsonSerializer.Serialize(toolUseId)},\"result\":{{\"content\":{JsonSerializer.Serialize(content)},\"status\":{JsonSerializer.Serialize(status)}}}}}}}";
-                            var synDoc = JsonDocument.Parse(syntheticJson);
+                            var synDoc = MakeSyntheticTurn(new SyntheticToolResultTurn("tool.result",
+                                new SyntheticToolResultData(toolUseId, new SyntheticToolResult(content, status))));
                             turns.Add(("tool.result", synDoc.RootElement, ts));
                             isToolResult = true;
                         }
@@ -158,8 +175,8 @@ class DataParsers(int? tail)
                             }
                         }
                     }
-                    var syntheticJson = $"{{\"type\":\"user.message\",\"data\":{{\"content\":{JsonSerializer.Serialize(content)}}}}}";
-                    var synDoc = JsonDocument.Parse(syntheticJson);
+                    var synDoc = MakeSyntheticTurn(new SyntheticContentTurn("user.message",
+                        new SyntheticContentData(content)));
                     turns.Add(("user.message", synDoc.RootElement, ts));
                 }
             }
@@ -175,8 +192,8 @@ class DataParsers(int? tail)
                             var text = block.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
                             if (!string.IsNullOrWhiteSpace(text))
                             {
-                                var syntheticJson = $"{{\"type\":\"assistant.message\",\"data\":{{\"content\":{JsonSerializer.Serialize(text)}}}}}";
-                                var synDoc = JsonDocument.Parse(syntheticJson);
+                                var synDoc = MakeSyntheticTurn(new SyntheticContentTurn("assistant.message",
+                                    new SyntheticContentData(text)));
                                 turns.Add(("assistant.message", synDoc.RootElement, ts));
                             }
                         }
@@ -184,9 +201,9 @@ class DataParsers(int? tail)
                         {
                             var toolName = SafeGetString(block, "name");
                             var toolUseId = SafeGetString(block, "id");
-                            var input = block.TryGetProperty("input", out var inp) ? inp.GetRawText() : "{}";
-                            var syntheticJson = $"{{\"type\":\"tool.execution_start\",\"data\":{{\"toolName\":{JsonSerializer.Serialize(toolName)},\"toolUseId\":{JsonSerializer.Serialize(toolUseId)},\"arguments\":{input}}}}}";
-                            var synDoc = JsonDocument.Parse(syntheticJson);
+                            var arguments = block.TryGetProperty("input", out var inp) ? inp : (JsonElement?)null;
+                            var synDoc = MakeSyntheticTurn(new SyntheticToolStartTurn("tool.execution_start",
+                                new SyntheticToolStartData(toolName, toolUseId, arguments)));
                             turns.Add(("tool.execution_start", synDoc.RootElement, ts));
                         }
                         else if (blockType == "thinking")
@@ -194,8 +211,8 @@ class DataParsers(int? tail)
                             var text = block.TryGetProperty("thinking", out var th) ? th.GetString() ?? "" : "";
                             if (!string.IsNullOrWhiteSpace(text))
                             {
-                                var syntheticJson = $"{{\"type\":\"assistant.thinking\",\"data\":{{\"content\":{JsonSerializer.Serialize(text)}}}}}";
-                                var synDoc = JsonDocument.Parse(syntheticJson);
+                                var synDoc = MakeSyntheticTurn(new SyntheticContentTurn("assistant.thinking",
+                                    new SyntheticContentData(text)));
                                 turns.Add(("assistant.thinking", synDoc.RootElement, ts));
                             }
                         }
@@ -223,8 +240,8 @@ class DataParsers(int? tail)
                     }
                     if (!string.IsNullOrEmpty(content))
                     {
-                        var syntheticJson = $"{{\"type\":\"user.message\",\"data\":{{\"content\":{JsonSerializer.Serialize(content)},\"queued\":true}}}}";
-                        var synDoc = JsonDocument.Parse(syntheticJson);
+                        var synDoc = MakeSyntheticTurn(new SyntheticContentTurn("user.message",
+                            new SyntheticContentData(content, queued: true)));
                         turns.Add(("user.message", synDoc.RootElement, ts));
                     }
                 }

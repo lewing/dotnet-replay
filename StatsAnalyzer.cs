@@ -212,65 +212,57 @@ class StatsAnalyzer(Func<string, JsonlData?> parseJsonlData, Func<string, JsonlD
         if (asJson)
         {
             // JSON output
-            var summary = new
-            {
-                total_files = stats.Count,
-                total_with_pass_status = stats.Count(s => s.Passed.HasValue),
-                passed = stats.Count(s => s.Passed == true),
-                failed = stats.Count(s => s.Passed == false),
-                pass_rate = stats.Any(s => s.Passed.HasValue) 
+            var summary = new BatchSummary(
+                total_files: stats.Count,
+                total_with_pass_status: stats.Count(s => s.Passed.HasValue),
+                passed: stats.Count(s => s.Passed == true),
+                failed: stats.Count(s => s.Passed == false),
+                pass_rate: stats.Any(s => s.Passed.HasValue) 
                     ? stats.Count(s => s.Passed == true) * 100.0 / stats.Count(s => s.Passed.HasValue) 
-                    : (double?)null,
-                avg_duration_seconds = stats.Count > 0 ? stats.Average(s => s.DurationSeconds) : 0.0,
-                avg_turns = stats.Count > 0 ? stats.Average(s => (double)s.TurnCount) : 0.0,
-                avg_tool_calls = stats.Count > 0 ? stats.Average(s => (double)s.ToolCallCount) : 0.0,
-                files = stats.Select(s => new
-                {
-                    file = s.FilePath,
-                    format = s.Format,
-                    model = s.Model,
-                    task = s.TaskName,
-                    status = s.Status,
-                    passed = s.Passed,
-                    duration_seconds = s.DurationSeconds,
-                    turns = s.TurnCount,
-                    tool_calls = s.ToolCallCount,
-                    errors = s.ErrorCount,
-                    score = s.AggregateScore
-                }).ToArray()
-            };
+                    : null,
+                avg_duration_seconds: stats.Count > 0 ? stats.Average(s => s.DurationSeconds) : 0.0,
+                avg_turns: stats.Count > 0 ? stats.Average(s => (double)s.TurnCount) : 0.0,
+                avg_tool_calls: stats.Count > 0 ? stats.Average(s => (double)s.ToolCallCount) : 0.0,
+                files: stats.Select(s => new FileStatsSummary(
+                    s.FilePath, s.Format, s.Model, s.TaskName,
+                    s.Status, s.Passed, s.DurationSeconds,
+                    s.TurnCount, s.ToolCallCount, s.ErrorCount, s.AggregateScore
+                )).ToArray()
+            );
             
+            ModelGroupSummary[] BuildModelGroups(Func<FileStats, string> keySelector) =>
+                stats.GroupBy(s => keySelector(s)).Select(g => new ModelGroupSummary(
+                    model: g.Key,
+                    count: g.Count(),
+                    passed: g.Count(s => s.Passed == true),
+                    failed: g.Count(s => s.Passed == false),
+                    pass_rate: g.Any(s => s.Passed.HasValue) ? g.Count(s => s.Passed == true) * 100.0 / g.Count(s => s.Passed.HasValue) : null,
+                    avg_duration: g.Average(s => s.DurationSeconds),
+                    avg_tool_calls: g.Average(s => s.ToolCallCount)
+                )).OrderBy(x => x.model).ToArray();
+
+            TaskGroupSummary[] BuildTaskGroups(Func<FileStats, string> keySelector) =>
+                stats.GroupBy(s => keySelector(s)).Select(g => new TaskGroupSummary(
+                    task: g.Key,
+                    count: g.Count(),
+                    passed: g.Count(s => s.Passed == true),
+                    failed: g.Count(s => s.Passed == false),
+                    pass_rate: g.Any(s => s.Passed.HasValue) ? g.Count(s => s.Passed == true) * 100.0 / g.Count(s => s.Passed.HasValue) : null,
+                    avg_duration: g.Average(s => s.DurationSeconds),
+                    avg_tool_calls: g.Average(s => s.ToolCallCount)
+                )).OrderBy(x => x.task).ToArray();
+
             if (groupBy is not null)
             {
                 if (groupBy == "model")
                 {
-                    var byModel = stats.GroupBy(s => s.Model ?? "(unknown)").Select(g => new
-                    {
-                        model = g.Key,
-                        count = g.Count(),
-                        passed = g.Count(s => s.Passed == true),
-                        failed = g.Count(s => s.Passed == false),
-                        pass_rate = g.Any(s => s.Passed.HasValue) ? g.Count(s => s.Passed == true) * 100.0 / g.Count(s => s.Passed.HasValue) : (double?)null,
-                        avg_duration = g.Average(s => s.DurationSeconds),
-                        avg_tool_calls = g.Average(s => s.ToolCallCount)
-                    }).OrderBy(x => x.model).ToArray();
-                    
-                    Console.WriteLine(JsonSerializer.Serialize(new { summary, by_model = byModel }, ColorHelper.SummarySerializer));
+                    var byModel = BuildModelGroups(s => s.Model ?? "(unknown)");
+                    Console.WriteLine(JsonSerializer.Serialize(new BatchWithModelGroup(summary, byModel), ColorHelper.SummarySerializer));
                 }
                 else if (groupBy == "task")
                 {
-                    var byTask = stats.GroupBy(s => s.TaskName ?? "(unknown)").Select(g => new
-                    {
-                        task = g.Key,
-                        count = g.Count(),
-                        passed = g.Count(s => s.Passed == true),
-                        failed = g.Count(s => s.Passed == false),
-                        pass_rate = g.Any(s => s.Passed.HasValue) ? g.Count(s => s.Passed == true) * 100.0 / g.Count(s => s.Passed.HasValue) : (double?)null,
-                        avg_duration = g.Average(s => s.DurationSeconds),
-                        avg_tool_calls = g.Average(s => s.ToolCallCount)
-                    }).OrderBy(x => x.task).ToArray();
-                    
-                    Console.WriteLine(JsonSerializer.Serialize(new { summary, by_task = byTask }, ColorHelper.SummarySerializer));
+                    var byTask = BuildTaskGroups(s => s.TaskName ?? "(unknown)");
+                    Console.WriteLine(JsonSerializer.Serialize(new BatchWithTaskGroup(summary, byTask), ColorHelper.SummarySerializer));
                 }
             }
             else

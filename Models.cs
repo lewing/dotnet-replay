@@ -94,6 +94,34 @@ record WazaSummary(
     double aggregate_score,
     ValidationOutput[] validations);
 
+// ========== Stats output records ==========
+record BatchSummary(
+    int total_files,
+    int total_with_pass_status,
+    int passed,
+    int failed,
+    double? pass_rate,
+    double avg_duration_seconds,
+    double avg_turns,
+    double avg_tool_calls,
+    FileStatsSummary[] files);
+
+record FileStatsSummary(
+    string file, string format, string? model, string? task,
+    string? status, bool? passed, double duration_seconds,
+    int turns, int tool_calls, int errors, double? score);
+
+record ModelGroupSummary(
+    string model, int count, int passed, int failed,
+    double? pass_rate, double avg_duration, double avg_tool_calls);
+
+record TaskGroupSummary(
+    string task, int count, int passed, int failed,
+    double? pass_rate, double avg_duration, double avg_tool_calls);
+
+record BatchWithModelGroup(BatchSummary summary, ModelGroupSummary[] by_model);
+record BatchWithTaskGroup(BatchSummary summary, TaskGroupSummary[] by_task);
+
 record FileStats(
     string FilePath,
     string Format,
