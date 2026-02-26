@@ -414,20 +414,21 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                     var size = FormatFileSize(fileSize);
                     var icon = eventsPath.Contains(".claude") ? "🔴" : "🤖";
                     var branchTag = !string.IsNullOrEmpty(branch) ? $" [{branch}]" : "";
-                    var display = !string.IsNullOrEmpty(summary) ? summary : cwd;
-                    int maxDisplay = Math.Max(10, listWidth - 21 - VisibleWidth(branchTag));
+                    var display = !string.IsNullOrEmpty(summary) ? summary.ReplaceLineEndings(" ") : cwd;
+                    int maxDisplay = Math.Max(10, listWidth - 19 - VisibleWidth(branchTag));
                     if (VisibleWidth(display) > maxDisplay) display = TruncateToWidth(display, maxDisplay - 3) + "...";
                     display += branchTag;
 
                     var rowPlain = $"  {icon} {age,6} {size,6} {display}";
                     var rowMarkup = $"  {icon} {age,6} {size,6} {Markup.Escape(display)}";
                     int rowVis = VisibleWidth(rowPlain);
-                    if (rowVis < listWidth) rowMarkup += new string(' ', listWidth - rowVis);
-                    else if (rowVis > listWidth)
+                    if (rowVis > listWidth)
                     {
-                        rowPlain = TruncateToWidth(rowPlain, listWidth);
+                        rowPlain = TruncateToWidth(rowPlain, listWidth - 1) + "…";
                         rowMarkup = Markup.Escape(rowPlain);
+                        rowVis = VisibleWidth(rowPlain);
                     }
+                    if (rowVis < listWidth) rowMarkup += new string(' ', listWidth - rowVis);
 
                     bool isCursor = vi == cursorIdx;
                     if (isCursor)
@@ -449,12 +450,13 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                 // Right side: preview panel
                 if (showPreview)
                 {
+                    // Explicitly position cursor to prevent emoji-width drift
+                    AnsiConsole.Cursor.SetPosition(listWidth, vi - scrollTop + 2);
                     int previewRow = vi - scrollTop + previewScroll;
                     if (previewRow >= 0 && previewRow < previewLines.Count)
                     {
                         var pLine = previewLines[previewRow];
                         var pVisible = StripMarkup(pLine);
-                        pVisible = GetVisibleText(pVisible);
                         int pVisWidth = VisibleWidth(pVisible);
                         if (pVisWidth >= previewWidth)
                         {
