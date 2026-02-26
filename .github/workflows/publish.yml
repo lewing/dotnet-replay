@@ -28,17 +28,17 @@ jobs:
       - name: Validate version consistency
         run: |
           TAG_VERSION="${{ steps.tag_name.outputs.current_version }}"
-          CSPROJ_VERSION=$(grep -oP '(?<=#:property Version=)[^\s]+' replay.cs)
+          CSPROJ_VERSION=$(grep -oP '(?<=<Version>)[^<]+' dotnet-replay.csproj)
           
           if [ "$TAG_VERSION" != "$CSPROJ_VERSION" ]; then
-            echo "Error: Tag version ($TAG_VERSION) does not match replay.cs version ($CSPROJ_VERSION)"
+            echo "Error: Tag version ($TAG_VERSION) does not match csproj version ($CSPROJ_VERSION)"
             exit 1
           fi
           
           echo "All versions match tag: ${TAG_VERSION}"
 
       - name: Pack
-        run: dotnet pack replay.cs -c Release -o nupkg /p:Version=${{ steps.tag_name.outputs.current_version }}
+        run: dotnet pack dotnet-replay.csproj -c Release -o nupkg /p:Version=${{ steps.tag_name.outputs.current_version }}
 
       - name: NuGet login
         uses: NuGet/login@v1
