@@ -54,7 +54,7 @@ public class DbPathTests
         var (stdout, stderr) = RunReplayWithArgs("--help");
         
         Assert.Contains("--db", stdout);
-        Assert.Contains("Browse sessions from an external session-store.db file", stdout);
+        Assert.Contains("Browse sessions from a session-store.db or skill-validator sessions.db", stdout);
     }
 
     // Helper to create an empty DB file
