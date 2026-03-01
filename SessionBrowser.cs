@@ -167,11 +167,29 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                 DateTime.TryParse(dateStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var updatedAt);
 
                 // Resolve events.jsonl: config_dir is relative to DB directory
+                // Normalize path separators for cross-platform (Windows backslashes → forward slashes)
                 var eventsPath = "";
                 long fileSize = 0;
                 if (configDir is not null)
                 {
-                    eventsPath = Path.Combine(dbDir, configDir, "events.jsonl");
+                    var normalizedConfigDir = configDir.Replace('\\', '/');
+                    var configFullPath = Path.Combine(dbDir, normalizedConfigDir);
+
+                    // Try direct: config_dir/events.jsonl
+                    eventsPath = Path.Combine(configFullPath, "events.jsonl");
+                    if (!File.Exists(eventsPath))
+                    {
+                        // Try nested: config_dir/session-state/*/events.jsonl
+                        var sessionStateDir2 = Path.Combine(configFullPath, "session-state");
+                        if (Directory.Exists(sessionStateDir2))
+                        {
+                            foreach (var subDir in Directory.GetDirectories(sessionStateDir2))
+                            {
+                                var candidate = Path.Combine(subDir, "events.jsonl");
+                                if (File.Exists(candidate)) { eventsPath = candidate; break; }
+                            }
+                        }
+                    }
                     if (File.Exists(eventsPath))
                         try { fileSize = new FileInfo(eventsPath).Length; } catch { }
                 }
