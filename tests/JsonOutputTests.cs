@@ -316,7 +316,7 @@ public class JsonOutputTests
         var startInfo = new System.Diagnostics.ProcessStartInfo
         {
             FileName = "dotnet",
-            Arguments = $"run --project {ReplayCs} -- {args}",
+            Arguments = $"run -v q --project {ReplayCs} -- {args}",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,

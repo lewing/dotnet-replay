@@ -595,7 +595,7 @@ void PrintHelp()
       (no args)           Browse recent Copilot CLI sessions
 
     Options:
-      --db <path>         Browse sessions from an external session-store.db file
+      --db <path>         Browse sessions from a session-store.db or skill-validator sessions.db
       --tail <N>          Show only the last N conversation turns
       --expand-tools      Show tool arguments, results, and thinking/reasoning
       --full              Don't truncate tool output (use with --expand-tools)

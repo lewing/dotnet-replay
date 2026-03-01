@@ -8,9 +8,60 @@ using static EvalProcessor;
 
 class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessionStateDir)
 {
-    public List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPath, long fileSize, string branch, string repository)>? LoadSessionsFromDb(string sessionStateDir, string? dbPathOverride = null)
+    SessionDbType _currentDbType = SessionDbType.CopilotCli;
+
+    /// <summary>Detect DB type by inspecting schema tables.</summary>
+    public static SessionDbType DetectDbType(string dbPath)
+    {
+        if (!File.Exists(dbPath)) return SessionDbType.Unknown;
+        try
+        {
+            using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+            conn.Open();
+
+            // Check for skill-validator schema_info table
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "SELECT value FROM schema_info WHERE key='type' LIMIT 1";
+                try
+                {
+                    var val = cmd.ExecuteScalar();
+                    if (val is string s && s == "skill-validator")
+                        return SessionDbType.SkillValidator;
+                }
+                catch { /* table doesn't exist */ }
+            }
+
+            // Check for Copilot CLI schema_version table
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'";
+                if (cmd.ExecuteScalar() != null) return SessionDbType.CopilotCli;
+            }
+
+            return SessionDbType.Unknown;
+        }
+        catch { return SessionDbType.Unknown; }
+    }
+
+    public List<BrowserSession>? LoadSessionsFromDb(string sessionStateDir, string? dbPathOverride = null)
     {
         var dbPath = dbPathOverride ?? Path.Combine(Path.GetDirectoryName(sessionStateDir)!, "session-store.db");
+        var dbType = DetectDbType(dbPath);
+
+        if (dbType == SessionDbType.SkillValidator)
+        {
+            _currentDbType = SessionDbType.SkillValidator;
+            return LoadSkillValidatorSessions(dbPath);
+        }
+
+        if (dbType != SessionDbType.CopilotCli) return null;
+        _currentDbType = SessionDbType.CopilotCli;
+        return LoadCopilotCliSessions(sessionStateDir, dbPath);
+    }
+
+    List<BrowserSession>? LoadCopilotCliSessions(string sessionStateDir, string dbPath)
+    {
         if (!File.Exists(dbPath)) return null;
 
         try
@@ -19,11 +70,6 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
             conn.Open();
 
             // Validate schema version
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'";
-                if (cmd.ExecuteScalar() == null) return null;
-            }
             using (var cmd = conn.CreateCommand())
             {
                 cmd.CommandText = "SELECT version FROM schema_version LIMIT 1";
@@ -43,7 +89,7 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
             }
 
             // Load sessions
-            var results = new List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPath, long fileSize, string branch, string repository)>();
+            var results = new List<BrowserSession>();
             using (var cmd = conn.CreateCommand())
             {
                 cmd.CommandText = "SELECT id, cwd, summary, updated_at, branch, repository FROM sessions ORDER BY updated_at DESC";
@@ -66,14 +112,117 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                     else
                         continue; // skip DB entries without local transcript files
 
-                    results.Add((id, summary, cwd, updatedAt, eventsPath, fileSize, branch, repository));
+                    results.Add(new BrowserSession(id, summary, cwd, updatedAt, eventsPath, fileSize, branch, repository));
                 }
             }
             return results;
         }
         catch
         {
-            return null; // any error → fall back to file scan
+            return null;
+        }
+    }
+
+    List<BrowserSession>? LoadSkillValidatorSessions(string dbPath)
+    {
+        if (!File.Exists(dbPath)) return null;
+        var dbDir = Path.GetDirectoryName(Path.GetFullPath(dbPath))!;
+
+        try
+        {
+            using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+            conn.Open();
+
+            var results = new List<BrowserSession>();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT s.id, s.skill_name, s.skill_path, s.scenario_name, s.run_index, s.role, s.model,
+                       s.config_dir, s.work_dir, s.prompt, s.status, s.started_at, s.completed_at,
+                       r.metrics_json, r.judge_json, r.pairwise_json
+                FROM sessions s
+                LEFT JOIN run_results r ON s.id = r.session_id
+                ORDER BY s.skill_name, s.scenario_name, s.run_index, s.role
+                """;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var id = reader.GetString(0);
+                var skillName = reader.GetString(1);
+                var skillPath = reader.GetString(2);
+                var scenarioName = reader.GetString(3);
+                var runIndex = reader.GetInt32(4);
+                var role = reader.GetString(5);
+                var model = reader.GetString(6);
+                var configDir = reader.IsDBNull(7) ? null : reader.GetString(7);
+                var workDir = reader.IsDBNull(8) ? null : reader.GetString(8);
+                var prompt = reader.IsDBNull(9) ? null : reader.GetString(9);
+                var status = reader.GetString(10);
+                var startedAtStr = reader.GetString(11);
+                var completedAtStr = reader.IsDBNull(12) ? null : reader.GetString(12);
+                var metricsJson = reader.IsDBNull(13) ? null : reader.GetString(13);
+                var judgeJson = reader.IsDBNull(14) ? null : reader.GetString(14);
+                var pairwiseJson = reader.IsDBNull(15) ? null : reader.GetString(15);
+
+                var dateStr = completedAtStr ?? startedAtStr;
+                DateTime.TryParse(dateStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var updatedAt);
+
+                // Resolve events.jsonl: config_dir is relative to DB directory
+                // Normalize path separators for cross-platform (Windows backslashes → forward slashes)
+                var eventsPath = "";
+                long fileSize = 0;
+                if (configDir is not null)
+                {
+                    var normalizedConfigDir = configDir.Replace('\\', '/');
+                    var configFullPath = Path.Combine(dbDir, normalizedConfigDir);
+
+                    // Try direct: config_dir/events.jsonl
+                    eventsPath = Path.Combine(configFullPath, "events.jsonl");
+                    if (!File.Exists(eventsPath))
+                    {
+                        // Try nested: config_dir/session-state/*/events.jsonl
+                        var sessionStateDir2 = Path.Combine(configFullPath, "session-state");
+                        if (Directory.Exists(sessionStateDir2))
+                        {
+                            foreach (var subDir in Directory.GetDirectories(sessionStateDir2))
+                            {
+                                var candidate = Path.Combine(subDir, "events.jsonl");
+                                if (File.Exists(candidate)) { eventsPath = candidate; break; }
+                            }
+                        }
+                    }
+                    if (File.Exists(eventsPath))
+                        try { fileSize = new FileInfo(eventsPath).Length; } catch { }
+                }
+
+                var summary = $"{scenarioName} ({role})";
+                var runTag = runIndex > 0 ? $" #{runIndex}" : "";
+                var cwd = workDir ?? skillPath;
+
+                results.Add(new BrowserSession(
+                    Id: id,
+                    Summary: summary + runTag,
+                    Cwd: cwd,
+                    UpdatedAt: updatedAt,
+                    EventsPath: eventsPath,
+                    FileSize: fileSize,
+                    Branch: model,
+                    Repository: skillName,
+                    DbType: SessionDbType.SkillValidator,
+                    SkillName: skillName,
+                    ScenarioName: scenarioName,
+                    Role: role,
+                    Model: model,
+                    Status: status,
+                    Prompt: prompt,
+                    MetricsJson: metricsJson,
+                    JudgeJson: judgeJson,
+                    PairwiseJson: pairwiseJson));
+            }
+            return results;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -87,15 +236,16 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
             return null;
         }
 
-        List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPath, long fileSize, string branch, string repository)> allSessions = [];
+        List<BrowserSession> allSessions = [];
         var sessionsLock = new System.Threading.Lock();
         bool scanComplete = false;
         int lastRenderedCount = -1;
+        bool isSkillDb = false;
 
         // Background scan thread — try DB first, fall back to file scan
         var scanThread = new Thread(() =>
         {
-            // Try loading Copilot sessions from SQLite DB (fast path)
+            // Try loading sessions from SQLite DB (fast path)
             var dbSessions = LoadSessionsFromDb(sessionStateDir!, dbPathOverride);
             string? dbPath = null;
             HashSet<string> knownSessionIds = [];
@@ -105,15 +255,16 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
             {
                 // Record the DB path for polling
                 dbPath = dbPathOverride ?? Path.Combine(Path.GetDirectoryName(sessionStateDir!)!, "session-store.db");
+                isSkillDb = _currentDbType == SessionDbType.SkillValidator;
                 
                 lock (sessionsLock)
                 {
                     allSessions.AddRange(dbSessions);
-                    allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+                    allSessions.Sort((a, b) => b.UpdatedAt.CompareTo(a.UpdatedAt));
                     foreach (var s in dbSessions)
                     {
-                        knownSessionIds.Add(s.id);
-                        if (s.updatedAt > lastUpdatedAt) lastUpdatedAt = s.updatedAt;
+                        knownSessionIds.Add(s.Id);
+                        if (s.UpdatedAt > lastUpdatedAt) lastUpdatedAt = s.UpdatedAt;
                     }
                 }
             }
@@ -153,15 +304,15 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
 
                     lock (sessionsLock)
                     {
-                        allSessions.Add((id, summary, cwd, updatedAt, eventsPath, fileSize, "", ""));
+                        allSessions.Add(new BrowserSession(id, summary, cwd, updatedAt, eventsPath, fileSize, "", ""));
                         knownSessionIds.Add(id);
                         if (allSessions.Count % 50 == 0)
-                            allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+                            allSessions.Sort((a, b) => b.UpdatedAt.CompareTo(a.UpdatedAt));
                     }
                 }
                 lock (sessionsLock)
                 {
-                    allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+                    allSessions.Sort((a, b) => b.UpdatedAt.CompareTo(a.UpdatedAt));
                 }
             }
             
@@ -202,9 +353,9 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                             long fileSize = new FileInfo(jsonlFile).Length;
                             lock (sessionsLock)
                             {
-                                allSessions.Add((claudeId, claudeSummary, claudeCwd, claudeUpdatedAt, jsonlFile, fileSize, "", ""));
+                                allSessions.Add(new BrowserSession(claudeId, claudeSummary, claudeCwd, claudeUpdatedAt, jsonlFile, fileSize, "", ""));
                                 if (allSessions.Count % 50 == 0)
-                                    allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+                                    allSessions.Sort((a, b) => b.UpdatedAt.CompareTo(a.UpdatedAt));
                             }
                         }
                         catch { continue; }
@@ -213,7 +364,7 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
             }
             lock (sessionsLock)
             {
-                allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+                allSessions.Sort((a, b) => b.UpdatedAt.CompareTo(a.UpdatedAt));
             }
             }
             scanComplete = true;
@@ -234,7 +385,7 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                         cmd.Parameters.AddWithValue("@lastUpdated", lastUpdatedAt.ToString("o"));
                         
                         using var reader = cmd.ExecuteReader();
-                        var newSessions = new List<(string id, string summary, string cwd, DateTime updatedAt, string eventsPath, long fileSize, string branch, string repository)>();
+                        var newSessions = new List<BrowserSession>();
                         
                         while (reader.Read())
                         {
@@ -256,7 +407,7 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                             else
                                 continue;
                             
-                            newSessions.Add((id, summary, cwd, updatedAt, eventsPath, fileSize, branch, repository));
+                            newSessions.Add(new BrowserSession(id, summary, cwd, updatedAt, eventsPath, fileSize, branch, repository));
                             knownSessionIds.Add(id);
                             if (updatedAt > lastUpdatedAt) lastUpdatedAt = updatedAt;
                         }
@@ -266,7 +417,7 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                             lock (sessionsLock)
                             {
                                 allSessions.AddRange(newSessions);
-                                allSessions.Sort((a, b) => b.updatedAt.CompareTo(a.updatedAt));
+                                allSessions.Sort((a, b) => b.UpdatedAt.CompareTo(a.UpdatedAt));
                             }
                         }
                     }
@@ -299,7 +450,7 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                     if (searchFilter.Length > 0)
                     {
                         var s = allSessions[i];
-                        var text = $"{s.summary} {s.cwd} {s.id} {s.branch} {s.repository}";
+                        var text = $"{s.Summary} {s.Cwd} {s.Id} {s.Branch} {s.Repository} {s.SkillName} {s.ScenarioName} {s.Role} {s.Model}";
                         if (!text.Contains(searchFilter, StringComparison.OrdinalIgnoreCase))
                             continue;
                     }
@@ -327,19 +478,22 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
         void LoadPreview()
         {
             if (filtered.Count == 0 || cursorIdx >= filtered.Count) { previewLines.Clear(); return; }
-            string eventsPath;
-            string id;
-            lock (sessionsLock)
-            {
-                var s = allSessions[filtered[cursorIdx]];
-                eventsPath = s.eventsPath;
-                id = s.id;
-            }
-            if (id == previewSessionId) return;
-            previewSessionId = id;
+            BrowserSession sess;
+            lock (sessionsLock) { sess = allSessions[filtered[cursorIdx]]; }
+            if (sess.Id == previewSessionId) return;
+            previewSessionId = sess.Id;
             previewScroll = 0;
             try
             {
+                if (sess.DbType == SessionDbType.SkillValidator)
+                {
+                    // Show eval metadata as preview for skill-validator sessions
+                    previewLines = RenderSkillPreview(sess);
+                    previewScroll = 0;
+                    return;
+                }
+
+                var eventsPath = sess.EventsPath;
                 var data = IsClaudeFormat(eventsPath) ? dataParsers.ParseClaudeData(eventsPath) : dataParsers.ParseJsonlData(eventsPath);
                 if (data == null) { previewLines = ["", "  (unable to load preview)"]; return; }
                 if (data.Turns.Count > 50)
@@ -352,6 +506,82 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                 previewLines = ["", "  (unable to load preview)"];
                 previewScroll = 0;
             }
+        }
+
+        List<string> RenderSkillPreview(BrowserSession s)
+        {
+            var lines = new List<string>
+            {
+                "",
+                $"  [bold]Skill:[/] {Markup.Escape(s.SkillName ?? "")}",
+                $"  [bold]Scenario:[/] {Markup.Escape(s.ScenarioName ?? "")}",
+                $"  [bold]Role:[/] {Markup.Escape(s.Role ?? "")}",
+                $"  [bold]Model:[/] {Markup.Escape(s.Model ?? "")}",
+                $"  [bold]Status:[/] {Markup.Escape(s.Status ?? "")}",
+                ""
+            };
+
+            if (!string.IsNullOrEmpty(s.Prompt))
+            {
+                lines.Add("  [bold]Prompt:[/]");
+                var promptLines = s.Prompt.Split('\n');
+                foreach (var pl in promptLines.Take(10))
+                    lines.Add($"    {Markup.Escape(pl.TrimEnd())}");
+                if (promptLines.Length > 10)
+                    lines.Add($"    [dim]... ({promptLines.Length - 10} more lines)[/]");
+                lines.Add("");
+            }
+
+            if (!string.IsNullOrEmpty(s.MetricsJson))
+            {
+                lines.Add("  [bold]Metrics:[/]");
+                try
+                {
+                    var doc = JsonDocument.Parse(s.MetricsJson);
+                    foreach (var prop in doc.RootElement.EnumerateObject().Take(10))
+                        lines.Add($"    {Markup.Escape(prop.Name)}: {Markup.Escape(prop.Value.ToString())}");
+                }
+                catch { lines.Add($"    {Markup.Escape(s.MetricsJson[..Math.Min(200, s.MetricsJson.Length)])}"); }
+                lines.Add("");
+            }
+
+            if (!string.IsNullOrEmpty(s.JudgeJson))
+            {
+                lines.Add("  [bold]Judge Result:[/]");
+                try
+                {
+                    var doc = JsonDocument.Parse(s.JudgeJson);
+                    foreach (var prop in doc.RootElement.EnumerateObject().Take(10))
+                        lines.Add($"    {Markup.Escape(prop.Name)}: {Markup.Escape(prop.Value.ToString())}");
+                }
+                catch { lines.Add($"    {Markup.Escape(s.JudgeJson[..Math.Min(200, s.JudgeJson.Length)])}"); }
+                lines.Add("");
+            }
+
+            if (!string.IsNullOrEmpty(s.PairwiseJson))
+            {
+                lines.Add("  [bold]Pairwise:[/]");
+                try
+                {
+                    var doc = JsonDocument.Parse(s.PairwiseJson);
+                    foreach (var prop in doc.RootElement.EnumerateObject().Take(10))
+                        lines.Add($"    {Markup.Escape(prop.Name)}: {Markup.Escape(prop.Value.ToString())}");
+                }
+                catch { lines.Add($"    {Markup.Escape(s.PairwiseJson[..Math.Min(200, s.PairwiseJson.Length)])}"); }
+                lines.Add("");
+            }
+
+            if (!string.IsNullOrEmpty(s.EventsPath) && File.Exists(s.EventsPath))
+            {
+                lines.Add($"  [dim]Events: {Markup.Escape(s.EventsPath)}[/]");
+                lines.Add($"  [dim]Press Enter to view transcript[/]");
+            }
+            else
+            {
+                lines.Add("  [dim]No events.jsonl available[/]");
+            }
+
+            return lines;
         }
 
         void Render()
@@ -378,11 +608,12 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                 lock (sessionsLock)
                 {
                     var cs = allSessions[filtered[cursorIdx]];
-                    var updated = cs.updatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
-                    cursorInfo = $" | {cs.id} {updated}";
+                    var updated = cs.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+                    cursorInfo = $" | {cs.Id} {updated}";
                 }
             }
-            var headerBase = $" 📋 Sessions — {count} sessions{loadingStatus}{filterStatus}";
+            var headerLabel = isSkillDb ? "🧪 Skill Eval" : "📋 Sessions";
+            var headerBase = $" {headerLabel} — {count} sessions{loadingStatus}{filterStatus}";
             var headerText = headerBase + cursorInfo;
             int headerVis = VisibleWidth(headerText);
             var hdrPad = headerVis < w ? new string(' ', w - headerVis) : "";
@@ -402,19 +633,34 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                 // Left side: session list
                 if (vi < filtered.Count)
                 {
-                    string id, summary, cwd, eventsPath, branch, repository;
-                    DateTime updatedAt;
-                    long fileSize;
+                    BrowserSession sess;
                     lock (sessionsLock)
                     {
                         var si = filtered[vi];
-                        (id, summary, cwd, updatedAt, eventsPath, fileSize, branch, repository) = allSessions[si];
+                        sess = allSessions[si];
                     }
-                    var age = FormatAge(DateTime.UtcNow - updatedAt);
-                    var size = FormatFileSize(fileSize);
-                    var icon = eventsPath.Contains(".claude") ? "🔴" : "🤖";
-                    var branchTag = !string.IsNullOrEmpty(branch) ? $" [{branch}]" : "";
-                    var display = !string.IsNullOrEmpty(summary) ? summary.ReplaceLineEndings(" ") : cwd;
+                    var age = FormatAge(DateTime.UtcNow - sess.UpdatedAt);
+                    var size = FormatFileSize(sess.FileSize);
+                    string icon;
+                    if (sess.DbType == SessionDbType.SkillValidator)
+                    {
+                        var statusIcon = sess.Status switch
+                        {
+                            "completed" => "✅",
+                            "timed_out" => "⏱️",
+                            "running" => "🔄",
+                            _ => "🧪"
+                        };
+                        icon = statusIcon;
+                    }
+                    else
+                        icon = sess.EventsPath.Contains(".claude") ? "🔴" : "🤖";
+                    var branchTag = !string.IsNullOrEmpty(sess.Branch) ? $" [{sess.Branch}]" : "";
+                    string display;
+                    if (sess.DbType == SessionDbType.SkillValidator)
+                        display = !string.IsNullOrEmpty(sess.Summary) ? $"{sess.Repository}: {sess.Summary}" : sess.Cwd;
+                    else
+                        display = !string.IsNullOrEmpty(sess.Summary) ? sess.Summary.ReplaceLineEndings(" ") : sess.Cwd;
                     int maxDisplay = Math.Max(10, listWidth - 19 - VisibleWidth(branchTag));
                     if (VisibleWidth(display) > maxDisplay) display = TruncateToWidth(display, maxDisplay - 3) + "...";
                     display += branchTag;
@@ -611,7 +857,15 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                     if (filtered.Count > 0 && cursorIdx < filtered.Count)
                     {
                         string path;
-                        lock (sessionsLock) { path = allSessions[filtered[cursorIdx]].eventsPath; }
+                        lock (sessionsLock) { path = allSessions[filtered[cursorIdx]].EventsPath; }
+                        if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                        {
+                            // No events file — toggle preview instead
+                            if (!showPreview) { showPreview = true; previewSessionId = null; }
+                            AnsiConsole.Clear();
+                            Render();
+                            break;
+                        }
                         Console.CursorVisible = true;
                         AnsiConsole.Clear();
                         return path;
@@ -694,7 +948,7 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                             if (filtered.Count > 0 && cursorIdx >= 0 && cursorIdx < filtered.Count)
                             {
                                 string rPath;
-                                lock (sessionsLock) { rPath = allSessions[filtered[cursorIdx]].eventsPath; }
+                                lock (sessionsLock) { rPath = allSessions[filtered[cursorIdx]].EventsPath; }
                                 Console.CursorVisible = true;
                                 AnsiConsole.Clear();
                                 LaunchResume(rPath);

@@ -288,7 +288,7 @@ static class TextUtils
 
     public static string SafeGetString(JsonElement el, string prop)
     {
-        if (el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String)
+        if (el.ValueKind == JsonValueKind.Object && el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String)
             return v.GetString() ?? "";
         return "";
     }
