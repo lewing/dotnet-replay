@@ -995,8 +995,17 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
         }
         else
         {
-            command = "copilot";
-            args = $"--resume \"{sessionId}\"";
+            // Copilot CLI can be installed standalone ("copilot") or as a gh extension ("gh copilot")
+            if (CanRun("copilot"))
+            {
+                command = "copilot";
+                args = $"--resume \"{sessionId}\"";
+            }
+            else
+            {
+                command = "gh";
+                args = $"copilot --resume \"{sessionId}\"";
+            }
         }
 
         Console.WriteLine($"Resuming session with: {command} {args}");
@@ -1016,7 +1025,27 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
         catch (Exception ex)
         {
             Console.Error.WriteLine($"Error launching {command}: {ex.Message}");
-            Console.Error.WriteLine($"Make sure '{command}' is installed and available in your PATH.");
+            Console.Error.WriteLine("Make sure 'copilot' or 'gh copilot' is installed and available in your PATH.");
         }
+    }
+
+    static bool CanRun(string command)
+    {
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = command,
+                Arguments = "--version",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            using var proc = System.Diagnostics.Process.Start(psi);
+            proc?.WaitForExit(3000);
+            return proc?.ExitCode == 0;
+        }
+        catch { return false; }
     }
 }
