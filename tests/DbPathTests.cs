@@ -54,7 +54,7 @@ public class DbPathTests
         var (stdout, stderr) = RunReplayWithArgs("--help");
         
         Assert.Contains("--db", stdout);
-        Assert.Contains("Browse sessions from an external session-store.db file", stdout);
+        Assert.Contains("Browse sessions from a session-store.db or skill-validator sessions.db", stdout);
     }
 
     // Helper to create an empty DB file
@@ -74,7 +74,7 @@ public class DbPathTests
         var startInfo = new System.Diagnostics.ProcessStartInfo
         {
             FileName = "dotnet",
-            Arguments = $"run --project {ReplayCs} -- {args}",
+            Arguments = $"run -v q --project {ReplayCs} -- {args}",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             RedirectStandardInput = true, // Need to redirect input too for proper TTY detection

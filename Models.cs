@@ -49,6 +49,28 @@ class EvalData
 
 enum PagerAction { Quit, Browse, Resume }
 
+enum SessionDbType { CopilotCli, SkillValidator, Unknown }
+
+record BrowserSession(
+    string Id,
+    string Summary,
+    string Cwd,
+    DateTime UpdatedAt,
+    string EventsPath,
+    long FileSize,
+    string Branch,
+    string Repository,
+    SessionDbType DbType = SessionDbType.CopilotCli,
+    string? SkillName = null,
+    string? ScenarioName = null,
+    string? Role = null,
+    string? Model = null,
+    string? Status = null,
+    string? Prompt = null,
+    string? MetricsJson = null,
+    string? JudgeJson = null,
+    string? PairwiseJson = null);
+
 // ========== JSON output records ==========
 record TurnOutput(
     int turn,
