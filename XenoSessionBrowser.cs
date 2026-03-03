@@ -159,14 +159,13 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             .HorizontalAlignment(Align.Stretch)
             .VerticalAlignment(Align.Stretch);
         previewBorder.MaxWidth = 40;
+        previewBorder.IsVisible = false;
 
-        var splitContent = new HStack(
+        var content = new HStack(
                 gridScroll,
                 previewBorder)
             .HorizontalAlignment(Align.Stretch)
             .VerticalAlignment(Align.Stretch);
-
-        var content = new ComputedVisual(() => showPreview.Value ? (Visual)splitContent : gridScroll);
 
         var root = new DockLayout()
             .Top(header)
@@ -228,6 +227,7 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             Execute = _ =>
             {
                 showPreview.Value = !showPreview.Value;
+                previewBorder.IsVisible = showPreview.Value;
                 if (showPreview.Value) lastSelectedRow = -1; // force refresh
             }
         });
