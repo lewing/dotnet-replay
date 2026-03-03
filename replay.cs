@@ -23,6 +23,7 @@ bool streamMode = false;
 bool noFollow = false;
 bool jsonMode = false;
 bool summaryMode = false;
+bool useXenoAtom = false;
 ContentRenderer? cr = null;
 
 string? dbPath = null;
@@ -69,6 +70,10 @@ for (int i = 0; i < cliArgs.Length; i++)
             if (i + 1 < cliArgs.Length) dbPath = cliArgs[++i];
             else { Console.Error.WriteLine("Error: --db requires a file path"); return; }
             break;
+        case "--xenoatom":
+        case "--xeno":
+            useXenoAtom = true;
+            break;
         default:
             if (cliArgs[i].StartsWith("-")) { Console.Error.WriteLine($"Unknown option: {cliArgs[i]}"); PrintHelp(); return; }
             // Treat .db files as dbPath, not filePath
@@ -103,6 +108,7 @@ var outputFormatters = new OutputFormatters(full);
 var statsAnalyzer = new StatsAnalyzer(dataParsers.ParseJsonlData, dataParsers.ParseClaudeData, dataParsers.ParseWazaData);
 var sessionStateDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".copilot", "session-state");
 var sessionBrowser = new SessionBrowser(cr, dataParsers, sessionStateDir);
+var xenoBrowser = useXenoAtom ? new XenoSessionBrowser(cr, dataParsers, sessionStateDir) : null;
 
 // --- Stats command dispatch ---
 if (cliArgs.Length > 0 && cliArgs[0] == "stats")
@@ -217,7 +223,7 @@ if (dbPath is not null)
         Console.Error.WriteLine("Error: Cannot use --db in redirected output");
         return;
     }
-    filePath = sessionBrowser.BrowseSessions(dbPath);
+    filePath = xenoBrowser?.BrowseSessions(dbPath) ?? sessionBrowser.BrowseSessions(dbPath);
     if (filePath is null) return;
     // Browser mode: loop between browser and pager
     bool browsing = true;
@@ -227,11 +233,12 @@ if (dbPath is not null)
         switch (action)
         {
             case PagerAction.Browse:
-                filePath = sessionBrowser.BrowseSessions(dbPath);
+                filePath = xenoBrowser?.BrowseSessions(dbPath) ?? sessionBrowser.BrowseSessions(dbPath);
                 if (filePath is null) browsing = false;
                 break;
             case PagerAction.Resume:
-                sessionBrowser.LaunchResume(filePath!);
+                if (xenoBrowser is not null) xenoBrowser.LaunchResume(filePath!);
+                else sessionBrowser.LaunchResume(filePath!);
                 browsing = false;
                 break;
             default:
@@ -248,7 +255,7 @@ else if (filePath is null)
         PrintHelp();
         return;
     }
-    filePath = sessionBrowser.BrowseSessions();
+    filePath = xenoBrowser?.BrowseSessions() ?? sessionBrowser.BrowseSessions();
     if (filePath is null) return;
     // Browser mode: loop between browser and pager
     bool browsing = true;
@@ -258,11 +265,12 @@ else if (filePath is null)
         switch (action)
         {
             case PagerAction.Browse:
-                filePath = sessionBrowser.BrowseSessions();
+                filePath = xenoBrowser?.BrowseSessions() ?? sessionBrowser.BrowseSessions();
                 if (filePath is null) browsing = false;
                 break;
             case PagerAction.Resume:
-                sessionBrowser.LaunchResume(filePath!);
+                if (xenoBrowser is not null) xenoBrowser.LaunchResume(filePath!);
+                else sessionBrowser.LaunchResume(filePath!);
                 browsing = false;
                 break;
             default:
@@ -596,6 +604,7 @@ void PrintHelp()
 
     Options:
       --db <path>         Browse sessions from a session-store.db or skill-validator sessions.db
+      --xenoatom          Use experimental XenoAtom.Terminal.UI browser
       --tail <N>          Show only the last N conversation turns
       --expand-tools      Show tool arguments, results, and thinking/reasoning
       --full              Don't truncate tool output (use with --expand-tools)

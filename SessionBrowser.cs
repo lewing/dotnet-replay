@@ -1029,6 +1029,8 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
         }
     }
 
+    public static bool CanRunStatic(string command) => CanRun(command);
+
     static bool CanRun(string command)
     {
         try
