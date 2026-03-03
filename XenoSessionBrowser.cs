@@ -183,6 +183,12 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             return snapshot.GetRowModel(rowIdx) as SessionRow;
         }
 
+        // Remove DataGrid's built-in Enter/Escape commands — they swallow keys when
+        // CanExecute returns false (ReadOnly mode has no active editor), because the
+        // command system returns "handled" even when CanExecute is false.
+        grid.RemoveCommand("DataGrid.CommitEdit");
+        grid.RemoveCommand("DataGrid.CancelEdit");
+
         // Commands — registered on grid (checked first in parent walk from focused element)
         Action openAction = () =>
         {
