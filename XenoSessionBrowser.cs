@@ -71,7 +71,6 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
 
         // Observable state
         var sessionCount = new State<int>(0);
-        var statusText = new State<string>("Loading...");
         var showPreview = new State<bool>(false);
         bool exitRequested = false;
 
@@ -128,26 +127,6 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             Width = GridLength.Star(1),
         });
 
-        // Handle Enter/Escape directly on grid since DataGrid consumes these keys
-        grid.KeyDownRouted += (sender, e) =>
-        {
-            if (e.Key == TerminalKey.Enter)
-            {
-                var row = GetSelectedRow();
-                if (row?.EventsPath is not null && File.Exists(row.EventsPath))
-                {
-                    selectedPath = row.EventsPath;
-                    exitRequested = true;
-                }
-                e.Handled = true;
-            }
-            else if (e.Key == TerminalKey.Escape)
-            {
-                exitRequested = true;
-                e.Handled = true;
-            }
-        };
-
         // Preview panel — VStack of TextBlocks, one per line (TextBlock ignores \n)
         var previewStack = new VStack()
             .HorizontalAlignment(Align.Stretch);
@@ -165,10 +144,6 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                 var loading = scanComplete ? "" : " Loading...";
                 return $"{label} — {sessionCount.Value} sessions{loading}";
             }));
-
-        var footer = new Footer()
-            .Left("↑↓ navigate | Enter open | Ctrl+F search | i preview | r resume")
-            .Right(new TextBlock(() => statusText.Value));
 
         var gridScroll = new ScrollViewer(grid)
             .HorizontalAlignment(Align.Stretch)
@@ -189,7 +164,7 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
 
         var root = new DockLayout()
             .Top(header)
-            .Bottom(new VStack(new CommandBar(), footer).Spacing(0))
+            .Bottom(new CommandBar())
             .Content(content);
 
         var toastHost = new ToastHost();
@@ -208,8 +183,8 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             return snapshot.GetRowModel(rowIdx) as SessionRow;
         }
 
-        // Commands
-        toastHost.AddCommand(new Command
+        // Commands — register on grid so Enter/Escape are routed before DataGrid's OnKeyDown
+        grid.AddCommand(new Command
         {
             Id = "Browser.Open",
             LabelMarkup = "Open",
@@ -225,6 +200,16 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                     exitRequested = true;
                 }
             }
+        });
+
+        grid.AddCommand(new Command
+        {
+            Id = "Browser.Quit",
+            LabelMarkup = "Quit",
+            Gesture = new KeyGesture(TerminalKey.Escape),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.CommandBar,
+            Execute = _ => exitRequested = true
         });
 
         toastHost.AddCommand(new Command
@@ -283,7 +268,6 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                         doc.AddRow(MakeRow(s));
                 }
                 sessionCount.Value = doc.Rows.Count;
-                statusText.Value = scanComplete ? "Ready" : "Loading...";
             }));
         scanThread.IsBackground = true;
         scanThread.Start();
