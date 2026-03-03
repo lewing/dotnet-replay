@@ -102,7 +102,8 @@ mdRenderer = new MarkdownRenderer(noColor);
 colors = new ColorHelper(noColor, full);
 cr = new ContentRenderer(colors, mdRenderer);
 var dataParsers = new DataParsers(tail);
-var pager = new InteractivePager(cr, noColor, filePath, filterType, expandTools);
+var pager = useClassicBrowser ? new InteractivePager(cr, noColor, filePath, filterType, expandTools) : null;
+var xenoPager = useClassicBrowser ? null : new XenoPager(cr, noColor, filePath, filterType, expandTools);
 var outputFormatters = new OutputFormatters(full);
 var statsAnalyzer = new StatsAnalyzer(dataParsers.ParseJsonlData, dataParsers.ParseClaudeData, dataParsers.ParseWazaData);
 var sessionStateDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".copilot", "session-state");
@@ -292,6 +293,11 @@ string Bold(string s) => noColor ? s : $"[bold]{Markup.Escape(s)}[/]";
 string Cyan(string s) => noColor ? s : $"[cyan]{Markup.Escape(s)}[/]";
 
 // --- OpenFile: format detection + pager, returns action ---
+PagerAction RunPager<T>(List<string> headerLines, List<string> contentLines, T parsedData, bool isJsonlFormat, bool noFollow) =>
+    xenoPager is not null
+        ? xenoPager.Run(headerLines, contentLines, parsedData, isJsonlFormat, noFollow)
+        : pager!.Run(headerLines, contentLines, parsedData, isJsonlFormat, noFollow);
+
 PagerAction OpenFile(string path)
 {
     if (!File.Exists(path)) { Console.Error.WriteLine($"Error: File not found: {path}"); return PagerAction.Quit; }
@@ -409,7 +415,7 @@ PagerAction OpenFile(string path)
             if (parsed is null) return PagerAction.Quit;
             headerLines = cr!.RenderEvalHeaderLines(parsed);
             contentLines = cr!.RenderEvalContentLines(parsed, filterType, expandTools);
-            return pager.Run(headerLines, contentLines, parsed, isJsonlFormat: true, noFollow: noFollow);
+            return RunPager(headerLines, contentLines, parsed, isJsonlFormat: true, noFollow: noFollow);
         }
         else if (isJsonl)
         {
@@ -417,14 +423,14 @@ PagerAction OpenFile(string path)
             if (parsed is null) return PagerAction.Quit;
             headerLines = cr!.RenderJsonlHeaderLines(parsed);
             contentLines = cr!.RenderJsonlContentLines(parsed, filterType, expandTools);
-            return pager.Run(headerLines, contentLines, parsed, isJsonlFormat: !isClaude, noFollow: isClaude || noFollow);
+            return RunPager(headerLines, contentLines, parsed, isJsonlFormat: !isClaude, noFollow: isClaude || noFollow);
         }
         else if (isWaza)
         {
             var parsed = dataParsers.ParseWazaData(wazaDoc!);
             headerLines = cr!.RenderWazaHeaderLines(parsed);
             contentLines = cr!.RenderWazaContentLines(parsed, filterType, expandTools);
-            return pager.Run(headerLines, contentLines, parsed, isJsonlFormat: false, noFollow: true);
+            return RunPager(headerLines, contentLines, parsed, isJsonlFormat: false, noFollow: true);
         }
         return PagerAction.Quit;
     }
