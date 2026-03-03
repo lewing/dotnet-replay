@@ -90,10 +90,8 @@ class XenoPager(ContentRenderer cr, bool noColor, string? filePath, string? filt
             .VerticalAlignment(Align.Stretch);
         infoPanel.IsVisible = false;
 
-        // Content area: stack log and info panel, toggle visibility
-        var content = new HStack(log, infoPanel)
-            .HorizontalAlignment(Align.Stretch)
-            .VerticalAlignment(Align.Stretch);
+        // Content area: ZStack layers both at full size, toggle visibility
+        var content = new ZStack(log, infoPanel);
 
         // Layout
         var root = new DockLayout()
