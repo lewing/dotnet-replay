@@ -23,7 +23,7 @@ bool streamMode = false;
 bool noFollow = false;
 bool jsonMode = false;
 bool summaryMode = false;
-bool useXenoAtom = false;
+bool useClassicBrowser = false;
 ContentRenderer? cr = null;
 
 string? dbPath = null;
@@ -70,9 +70,8 @@ for (int i = 0; i < cliArgs.Length; i++)
             if (i + 1 < cliArgs.Length) dbPath = cliArgs[++i];
             else { Console.Error.WriteLine("Error: --db requires a file path"); return; }
             break;
-        case "--xenoatom":
-        case "--xeno":
-            useXenoAtom = true;
+        case "--classic":
+            useClassicBrowser = true;
             break;
         default:
             if (cliArgs[i].StartsWith("-")) { Console.Error.WriteLine($"Unknown option: {cliArgs[i]}"); PrintHelp(); return; }
@@ -108,7 +107,7 @@ var outputFormatters = new OutputFormatters(full);
 var statsAnalyzer = new StatsAnalyzer(dataParsers.ParseJsonlData, dataParsers.ParseClaudeData, dataParsers.ParseWazaData);
 var sessionStateDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".copilot", "session-state");
 var sessionBrowser = new SessionBrowser(cr, dataParsers, sessionStateDir);
-var xenoBrowser = useXenoAtom ? new XenoSessionBrowser(cr, dataParsers, sessionStateDir) : null;
+var xenoBrowser = useClassicBrowser ? null : new XenoSessionBrowser(cr, dataParsers, sessionStateDir);
 
 // --- Stats command dispatch ---
 if (cliArgs.Length > 0 && cliArgs[0] == "stats")
@@ -604,7 +603,7 @@ void PrintHelp()
 
     Options:
       --db <path>         Browse sessions from a session-store.db or skill-validator sessions.db
-      --xenoatom          Use experimental XenoAtom.Terminal.UI browser
+      --classic            Use classic Spectre.Console browser instead of XenoAtom.Terminal.UI
       --tail <N>          Show only the last N conversation turns
       --expand-tools      Show tool arguments, results, and thinking/reasoning
       --full              Don't truncate tool output (use with --expand-tools)
