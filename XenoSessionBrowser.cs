@@ -183,7 +183,18 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             return snapshot.GetRowModel(rowIdx) as SessionRow;
         }
 
-        // Commands — register on grid so Enter/Escape are routed before DataGrid's OnKeyDown
+        // Commands — registered on grid (checked first in parent walk from focused element)
+        Action openAction = () =>
+        {
+            var row = GetSelectedRow();
+            if (row?.EventsPath is not null && File.Exists(row.EventsPath))
+            {
+                selectedPath = row.EventsPath;
+                exitRequested = true;
+            }
+        };
+        Action quitAction = () => exitRequested = true;
+
         grid.AddCommand(new Command
         {
             Id = "Browser.Open",
@@ -191,15 +202,7 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             Gesture = new KeyGesture(TerminalKey.Enter),
             Importance = CommandImportance.Primary,
             Presentation = CommandPresentation.CommandBar,
-            Execute = _ =>
-            {
-                var row = GetSelectedRow();
-                if (row?.EventsPath is not null && File.Exists(row.EventsPath))
-                {
-                    selectedPath = row.EventsPath;
-                    exitRequested = true;
-                }
-            }
+            Execute = _ => openAction()
         });
 
         grid.AddCommand(new Command
@@ -209,7 +212,17 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             Gesture = new KeyGesture(TerminalKey.Escape),
             Importance = CommandImportance.Secondary,
             Presentation = CommandPresentation.CommandBar,
-            Execute = _ => exitRequested = true
+            Execute = _ => quitAction()
+        });
+
+        toastHost.AddCommand(new Command
+        {
+            Id = "Browser.QuitQ",
+            LabelMarkup = "Quit",
+            Gesture = new KeyGesture('q'),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.None,
+            Execute = _ => quitAction()
         });
 
         toastHost.AddCommand(new Command
