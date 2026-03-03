@@ -72,7 +72,6 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
         // Observable state
         var sessionCount = new State<int>(0);
         var statusText = new State<string>("Loading...");
-        var previewText = new State<string>("");
         var showPreview = new State<bool>(false);
         bool exitRequested = false;
 
@@ -129,9 +128,30 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             Width = GridLength.Star(1),
         });
 
-        // Preview panel
-        var previewBlock = new TextBlock(() => previewText.Value).Wrap(true);
-        var previewScroll = new ScrollViewer(previewBlock)
+        // Handle Enter/Escape directly on grid since DataGrid consumes these keys
+        grid.KeyDownRouted += (sender, e) =>
+        {
+            if (e.Key == TerminalKey.Enter)
+            {
+                var row = GetSelectedRow();
+                if (row?.EventsPath is not null && File.Exists(row.EventsPath))
+                {
+                    selectedPath = row.EventsPath;
+                    exitRequested = true;
+                }
+                e.Handled = true;
+            }
+            else if (e.Key == TerminalKey.Escape)
+            {
+                exitRequested = true;
+                e.Handled = true;
+            }
+        };
+
+        // Preview panel — VStack of TextBlocks, one per line (TextBlock ignores \n)
+        var previewStack = new VStack()
+            .HorizontalAlignment(Align.Stretch);
+        var previewScroll = new ScrollViewer(previewStack)
             .HorizontalAlignment(Align.Stretch)
             .VerticalAlignment(Align.Stretch);
 
@@ -158,7 +178,7 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             .Style(BorderStyle.Single)
             .HorizontalAlignment(Align.Stretch)
             .VerticalAlignment(Align.Stretch);
-        previewBorder.MaxWidth = 40;
+        previewBorder.MaxWidth = 60;
         previewBorder.IsVisible = false;
 
         var content = new HStack(
@@ -275,16 +295,19 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             if (exitRequested)
                 return TerminalLoopResult.Stop;
 
-            // Update preview when selection changes
-            var currentRow = grid.CurrentCell.Row;
-            if (currentRow != lastSelectedRow && showPreview.Value)
+            // Update preview when selection changes or preview just toggled on
+            if (showPreview.Value)
             {
-                lastSelectedRow = currentRow;
-                var row = GetSelectedRow();
-                if (row?.Source is not null)
-                    previewText.Value = BuildPreviewText(row.Source);
-                else
-                    previewText.Value = "";
+                var currentRow = grid.CurrentCell.Row;
+                if (currentRow != lastSelectedRow)
+                {
+                    lastSelectedRow = currentRow;
+                    var row = GetSelectedRow();
+                    var text = row?.Source is not null ? BuildPreviewText(row.Source) : "";
+                    previewStack.Children.Clear();
+                    foreach (var line in text.Split('\n'))
+                        previewStack.Children.Add(new TextBlock(line));
+                }
             }
             return TerminalLoopResult.Continue;
         });
@@ -373,6 +396,48 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             if (!string.IsNullOrEmpty(s.Repository)) sb.AppendLine($"Repository: {s.Repository}");
             sb.AppendLine($"Updated: {s.UpdatedAt.ToLocalTime():yyyy-MM-dd HH:mm}");
             sb.AppendLine($"Size: {FormatFileSize(s.FileSize)}");
+            sb.AppendLine();
+
+            // Read first user messages from the events file
+            if (File.Exists(s.EventsPath))
+            {
+                try
+                {
+                    int msgCount = 0;
+                    foreach (var line in File.ReadLines(s.EventsPath).Take(50))
+                    {
+                        if (string.IsNullOrWhiteSpace(line)) continue;
+                        try
+                        {
+                            var doc = JsonDocument.Parse(line);
+                            var root = doc.RootElement;
+                            var role = SafeGetString(root, "role");
+                            if (role == "user")
+                            {
+                                var content = SafeGetString(root, "content");
+                                if (string.IsNullOrEmpty(content) && root.TryGetProperty("content", out var cArr) && cArr.ValueKind == JsonValueKind.Array)
+                                {
+                                    foreach (var item in cArr.EnumerateArray())
+                                    {
+                                        if (SafeGetString(item, "type") == "text")
+                                        { content = SafeGetString(item, "text"); break; }
+                                    }
+                                }
+                                if (!string.IsNullOrEmpty(content))
+                                {
+                                    msgCount++;
+                                    var preview = content.ReplaceLineEndings(" ");
+                                    if (preview.Length > 120) preview = preview[..117] + "...";
+                                    sb.AppendLine($"User: {preview}");
+                                    if (msgCount >= 3) break;
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+            }
         }
         return sb.ToString();
     }
