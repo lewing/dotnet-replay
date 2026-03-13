@@ -35,3 +35,15 @@
 - **Feature 2:** Added `--db <path>` CLI argument to load sessions from an external session-store.db file. CLI parsing treats .db files as dbPath (not filePath). `LoadSessionsFromDb` and `BrowseSessions` now accept optional `dbPathOverride` parameter. When external DB is used, filesystem fallback scan is skipped.
 - Both features integrate with existing `sessionsLock` and UI throttle loop — no changes needed to rendering logic.
 - Pattern: Use background thread polling with `Thread.Sleep(5000)` for periodic updates in TUI apps.
+
+### 2026-03-13: XenoAtom Phase 1 Assessment (Deckard Assessment Input)
+- Deckard completed feature parity assessment. XenoAtom.Terminal.UI has 6 identified gaps: 3 critical (navigation, search cycling, preview), 3 polish (horizontal scroll, status bar, line numbers).
+- Key blocker: LogControl v1.3.0 API lacks public scroll methods; may require reflection bridge for Phase 1.
+- Batty tasked with Phase 1 implementation (Est. 4–7 hours for 3 items).
+- Questions raised: LogControl scroll API, search integration feasibility, horizontal scroll support, performance impact on large sessions.
+
+### 2026-03-13: XenoAtom pager/browser phase 1
+- XenoAtom.Terminal.UI `LogControl` 1.3.0 exposes search state and search navigation (`OpenSearch`, `Search`, `SearchText`, `MatchCount`, `ActiveMatchIndex`, `GoToNextMatch`, `GoToPreviousMatch`) plus `ScrollToTail`, but it does not expose public page/line/home/end scroll methods.
+- Xeno pager search parity should use the public `GoToNextMatch`/`GoToPreviousMatch` APIs for `n`/`N` instead of reimplementing match tracking.
+- Xeno pager scrolling currently has to bridge through LogControl's internal `_scrollViewer` and drive its public `VerticalOffset`/`ViewportHeight` values to implement PageUp/PageDown/Home/End and vim-style `j`/`k`/`g`/`G`.
+- Xeno session previews should parse events with `DataParsers`, render with `ContentRenderer.RenderJsonlContentLines`, and strip Spectre markup before pushing lines into `TextBlock` controls. Keeping the preview to roughly the first 6 turns / 28 lines keeps the browser readable.
