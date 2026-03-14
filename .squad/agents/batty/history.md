@@ -30,6 +30,19 @@
 
 <!-- Append new learnings below. Each entry is something lasting about the project. -->
 
+### 2026-03-14: XenoPager Phase 2 complete — horizontal scroll & status bar
+- Horizontal scrolling implemented with `h`/`l`/`0` keys (left/right/reset) using binding-safe `trackedHorizontalOffset` pattern, matching the existing `trackedOffset` vertical scroll workaround.
+- Status bar header now displays: line position (e.g., "Line 45/123"), column indicator ("Col X+"), search match count ("Match 3/15" in search mode), filter status, and follow mode toggle state.
+- Pattern applied: All offset updates go through local tracked values; `SetHorizontalOffset()` / `SetVerticalOffset()` are the only write points to `ScrollViewer` properties, avoiding binding-tracker read/write conflicts.
+- Horizontal offset preserved across `PopulateLog()` rebuilds triggered by filter changes, follow updates, and tool toggles.
+- Build clean, all feature-gap tests passing.
+
+### 2026-03-14: XenoPager Phase 2 horizontal/status pattern
+- `XenoPager.cs` should treat both `ScrollViewer.VerticalOffset` and `ScrollViewer.HorizontalOffset` as write-only inside the XenoAtom UI loop. Keep local tracked values (`trackedOffset`, `trackedHorizontalOffset`) and drive the reflected `LogControl._scrollViewer` from helpers to avoid binding-tracker read/write conflicts.
+- `PopulateLog()` should reapply the tracked horizontal offset after rebuilding lines so filter changes, follow updates, and tool toggles preserve sideways scroll state.
+- The compact Xeno pager status/header now lives in `XenoPager.cs` and should surface line position, optional `Col X+`, and search match counts, while `InteractivePager.cs` remains the parity reference for vim-style pager behavior.
+- Key file paths for this work: `XenoPager.cs` (XenoAtom pager implementation) and `InteractivePager.cs` (Spectre parity reference).
+
 ### 2025-02-24: DB polling and external DB support
 - **Feature 1:** Added periodic DB re-query in browser mode. After initial session load completes, the scan thread now polls the SQLite DB every 5 seconds for new sessions. Uses `HashSet<string>` to track known session IDs and avoid duplicates. Only re-queries DB; filesystem and Claude Code scans remain one-shot. Polling continues until thread is cancelled (background thread).
 - **Feature 2:** Added `--db <path>` CLI argument to load sessions from an external session-store.db file. CLI parsing treats .db files as dbPath (not filePath). `LoadSessionsFromDb` and `BrowseSessions` now accept optional `dbPathOverride` parameter. When external DB is used, filesystem fallback scan is skipped.
@@ -47,3 +60,8 @@
 - Xeno pager search parity should use the public `GoToNextMatch`/`GoToPreviousMatch` APIs for `n`/`N` instead of reimplementing match tracking.
 - Xeno pager scrolling currently has to bridge through LogControl's internal `_scrollViewer` and drive its public `VerticalOffset`/`ViewportHeight` values to implement PageUp/PageDown/Home/End and vim-style `j`/`k`/`g`/`G`.
 - Xeno session previews should parse events with `DataParsers`, render with `ContentRenderer.RenderJsonlContentLines`, and strip Spectre markup before pushing lines into `TextBlock` controls. Keeping the preview to roughly the first 6 turns / 28 lines keeps the browser readable.
+
+### 2026-03-14: Review fixes for Xeno follow/preview
+- `JsonDocument` instances created only for follow-mode updates must not be retained in `JsonlData.Events`; clone the `JsonElement` needed for `Turns`, dispose the document immediately, and increment `EventCount` separately.
+- Xeno session browser preview workers should share a generation counter and bail out before expensive file parsing when their generation is stale; the UI-side generation check alone is not enough to prevent wasted background work.
+- Skill DB preview metrics parsing should use `using var` for temporary `JsonDocument` instances inside `BuildPreviewText()`.

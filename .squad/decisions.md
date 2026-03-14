@@ -4,6 +4,52 @@
 
 <!-- Append decisions below. Format: ### {timestamp}: {topic} -->
 
+### 2026-03-14: Session Browser Branch Metadata Fallback
+
+**Author:** Batty  
+**Status:** Completed
+
+Fixed branch display by enriching sessions from per-session metadata files instead of trusting the top-level session-store DB alone.
+
+**Decision:**
+- For Copilot sessions, read `branch` and `repository` from `workspace.yaml` when available
+- If either field is still missing, inspect the `session.start` event in `events.jsonl` and recover them from `data.context`
+- For Claude sessions, recover branch from `gitBranch` in the JSONL stream
+- Apply the same enrichment in both the Spectre browser and the XenoAtom browser, including DB-loaded sessions whose DB row has missing branch data
+
+**Why:** Filesystem-loaded sessions were hardcoded to empty branch/repository. Real session-store DBs contain a mix of populated and empty branch values, so DB reads alone are not reliable. The per-session files are the best local fallback and keep both browsers consistent.
+
+---
+
+### 2026-03-14: XenoPager Horizontal Offset Tracking
+
+**Author:** Batty  
+**Status:** Completed
+
+To support horizontal scrolling in `XenoPager.cs`, the pager mirrors the existing vertical-scroll workaround: keep a local tracked horizontal offset and only write to the reflected `ScrollViewer.HorizontalOffset` property.
+
+**Rationale:** XenoAtom.Terminal.UI binding tracking can throw when the same offset property is read and written during one tracking context. Matching the `trackedOffset` pattern avoids that conflict and keeps horizontal scroll behavior stable across redraws.
+
+**Implementation:**
+- Added `trackedHorizontalOffset` plus `GetHorizontalOffset()` / `SetHorizontalOffset()` helpers in `XenoPager.cs`
+- Bound `h`, `l`, and `0` to left/right/reset column movement
+- Reapply the tracked horizontal offset after `PopulateLog()` rebuilds content
+
+---
+
+### 2026-03-14: XenoAtom Review Follow-up Decisions
+
+**Author:** Batty  
+**Status:** Completed
+
+Two issues resolved:
+
+1. **Follow Mode Memory Leak Fix** — Retain only cloned `JsonElement` turn payloads needed for rendering and update `EventCount` separately; do not append live `JsonDocument` instances to `JsonlData.Events` during tailing. Keeps long-running follow sessions from accumulating undisposed documents.
+
+2. **Preview Selection Generation Check** — For session browser previews, the selection generation check needs to happen inside the worker before expensive parse/render work, not just when publishing the finished preview text. Reduces wasted background work when users scroll rapidly through large sessions.
+
+---
+
 ### 2026-03-13: XenoAtom UI Feature Gaps Assessment
 
 **Author:** Deckard (Lead)  
