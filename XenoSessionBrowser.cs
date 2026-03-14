@@ -11,6 +11,7 @@ using XenoAtom.Terminal.UI.Geometry;
 using XenoAtom.Terminal.UI.Input;
 using XenoAtom.Terminal.UI.Styling;
 using static TextUtils;
+using static EvalProcessor;
 using DotnetReplay;
 
 namespace DotnetReplay
@@ -45,6 +46,7 @@ namespace DotnetReplay
 class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessionStateDir)
 {
     SessionDbType _currentDbType = SessionDbType.CopilotCli;
+    int _previewGeneration;
 
     /// <summary>
     /// Browse sessions using XenoAtom.Terminal.UI fullscreen DataGrid.
@@ -73,6 +75,9 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
         var sessionCount = new State<int>(0);
         var showPreview = new State<bool>(false);
         bool exitRequested = false;
+        string? pendingPreviewText = null;
+        _previewGeneration = 0;
+        Thread? previewThread = null;
 
         // DataGrid
         var doc = new DataGridListDocument<SessionRow>();
@@ -298,20 +303,49 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             if (exitRequested)
                 return TerminalLoopResult.Stop;
 
-            // Update preview when selection changes or preview just toggled on
+            // Load preview text off the UI thread and hand completed text back to the next frame.
             if (showPreview.Value)
             {
                 var currentRow = grid.CurrentCell.Row;
                 if (currentRow != lastSelectedRow)
                 {
                     lastSelectedRow = currentRow;
-                    var row = GetSelectedRow();
-                    var text = row?.Source is not null ? BuildPreviewText(row.Source) : "";
+                    var generation = Interlocked.Increment(ref _previewGeneration);
+                    Volatile.Write(ref pendingPreviewText, null);
                     previewStack.Children.Clear();
-                    foreach (var line in text.Split('\n'))
-                        previewStack.Children.Add(new TextBlock(line));
+                    previewStack.Children.Add(new TextBlock("Loading..."));
+
+                    var row = GetSelectedRow();
+                    if (row?.Source is not null)
+                    {
+                        var source = row.Source;
+                        previewThread = new Thread(() =>
+                        {
+                            var text = BuildPreviewText(source, generation);
+                            if (Volatile.Read(ref _previewGeneration) == generation)
+                                Volatile.Write(ref pendingPreviewText, text);
+                        })
+                        {
+                            IsBackground = true
+                        };
+                        previewThread.Start();
+                    }
+                    else
+                    {
+                        Volatile.Write(ref pendingPreviewText, "");
+                    }
                 }
             }
+
+            var completedPreviewText = Volatile.Read(ref pendingPreviewText);
+            if (completedPreviewText is not null)
+            {
+                Volatile.Write(ref pendingPreviewText, null);
+                previewStack.Children.Clear();
+                foreach (var line in completedPreviewText.Split('\n'))
+                    previewStack.Children.Add(new TextBlock(line));
+            }
+
             return TerminalLoopResult.Continue;
         });
 
@@ -360,8 +394,11 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
         };
     }
 
-    string BuildPreviewText(BrowserSession s)
+    string BuildPreviewText(BrowserSession s, int generation)
     {
+        if (Volatile.Read(ref _previewGeneration) != generation)
+            return "";
+
         var sb = new StringBuilder();
         if (s.DbType == SessionDbType.SkillValidator)
         {
@@ -383,7 +420,7 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                 sb.AppendLine("Metrics:");
                 try
                 {
-                    var jsonDoc = JsonDocument.Parse(s.MetricsJson);
+                    using var jsonDoc = JsonDocument.Parse(s.MetricsJson);
                     foreach (var prop in jsonDoc.RootElement.EnumerateObject().Take(10))
                         sb.AppendLine($"  {prop.Name}: {prop.Value}");
                 }
@@ -401,45 +438,48 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             sb.AppendLine($"Size: {FormatFileSize(s.FileSize)}");
             sb.AppendLine();
 
-            // Read first user messages from the events file
-            if (File.Exists(s.EventsPath))
+            if (!File.Exists(s.EventsPath))
+                return sb.ToString();
+
+            if (Volatile.Read(ref _previewGeneration) != generation)
+                return "";
+
+            try
             {
-                try
+                var data = IsClaudeFormat(s.EventsPath)
+                    ? dataParsers.ParseClaudeData(s.EventsPath)
+                    : dataParsers.ParseJsonlData(s.EventsPath);
+                if (data == null)
                 {
-                    int msgCount = 0;
-                    foreach (var line in File.ReadLines(s.EventsPath).Take(50))
-                    {
-                        if (string.IsNullOrWhiteSpace(line)) continue;
-                        try
-                        {
-                            var doc = JsonDocument.Parse(line);
-                            var root = doc.RootElement;
-                            var role = SafeGetString(root, "role");
-                            if (role == "user")
-                            {
-                                var content = SafeGetString(root, "content");
-                                if (string.IsNullOrEmpty(content) && root.TryGetProperty("content", out var cArr) && cArr.ValueKind == JsonValueKind.Array)
-                                {
-                                    foreach (var item in cArr.EnumerateArray())
-                                    {
-                                        if (SafeGetString(item, "type") == "text")
-                                        { content = SafeGetString(item, "text"); break; }
-                                    }
-                                }
-                                if (!string.IsNullOrEmpty(content))
-                                {
-                                    msgCount++;
-                                    var preview = content.ReplaceLineEndings(" ");
-                                    if (preview.Length > 120) preview = preview[..117] + "...";
-                                    sb.AppendLine($"User: {preview}");
-                                    if (msgCount >= 3) break;
-                                }
-                            }
-                        }
-                        catch { }
-                    }
+                    sb.AppendLine("(unable to load preview)");
+                    return sb.ToString();
                 }
-                catch { }
+
+                if (Volatile.Read(ref _previewGeneration) != generation)
+                    return "";
+
+                const int previewTurnLimit = 6;
+                const int previewLineLimit = 28;
+                int originalTurnCount = data.Turns.Count;
+                if (data.Turns.Count > previewTurnLimit)
+                    data = data with { Turns = data.Turns.Take(previewTurnLimit).ToList() };
+
+                int emittedLines = 0;
+                foreach (var line in cr.RenderJsonlContentLines(data, null, false))
+                {
+                    var plain = StripMarkup(line).TrimEnd();
+                    if (emittedLines >= previewLineLimit)
+                        break;
+                    sb.AppendLine(plain);
+                    emittedLines++;
+                }
+
+                if (originalTurnCount > previewTurnLimit || emittedLines >= previewLineLimit)
+                    sb.AppendLine("...");
+            }
+            catch
+            {
+                sb.AppendLine("(unable to load preview)");
             }
         }
         return sb.ToString();
@@ -476,32 +516,20 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                 var eventsPath = Path.Combine(dir, "events.jsonl");
                 if (!File.Exists(yamlPath) || !File.Exists(eventsPath)) continue;
 
-                Dictionary<string, string> props = [];
-                try
-                {
-                    foreach (var line in File.ReadLines(yamlPath))
-                    {
-                        var colonIdx = line.IndexOf(':');
-                        if (colonIdx > 0)
-                        {
-                            var key = line[..colonIdx].Trim();
-                            var value = line[(colonIdx + 1)..].Trim().Trim('"');
-                            props[key] = value;
-                        }
-                    }
-                }
-                catch { continue; }
-
+                var props = SessionBrowser.ReadWorkspaceProperties(yamlPath);
                 var id = props.GetValueOrDefault("id", Path.GetFileName(dir));
                 var summary = props.GetValueOrDefault("summary", "");
                 var cwd = props.GetValueOrDefault("cwd", "");
                 var updatedStr = props.GetValueOrDefault("updated_at", "");
+                var branch = props.GetValueOrDefault("branch", "");
+                var repository = props.GetValueOrDefault("repository", "");
                 DateTime.TryParse(updatedStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var updatedAt);
 
                 long fileSize = 0;
                 try { fileSize = new FileInfo(eventsPath).Length; } catch { }
 
-                var session = new BrowserSession(id, summary, cwd, updatedAt, eventsPath, fileSize, "", "");
+                (branch, repository) = SessionBrowser.EnrichCopilotSessionMetadata(yamlPath, eventsPath, branch, repository);
+                var session = new BrowserSession(id, summary, cwd, updatedAt, eventsPath, fileSize, branch, repository);
                 lock (sessionsLock)
                 {
                     allSessions.Add(session);
@@ -559,7 +587,8 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                             if (claudeSummary == "") claudeSummary = Path.GetFileName(projDir).Replace("-", "\\");
 
                             long fileSize = new FileInfo(jsonlFile).Length;
-                            var session = new BrowserSession(claudeId, claudeSummary, claudeCwd, claudeUpdatedAt, jsonlFile, fileSize, "", "");
+                            var claudeBranch = SessionBrowser.ReadClaudeBranch(jsonlFile);
+                            var session = new BrowserSession(claudeId, claudeSummary, claudeCwd, claudeUpdatedAt, jsonlFile, fileSize, claudeBranch, "");
                             lock (sessionsLock)
                             {
                                 allSessions.Add(session);
@@ -635,11 +664,13 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                     var repository = reader.IsDBNull(5) ? "" : reader.GetString(5);
                     DateTime.TryParse(updatedStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var updatedAt);
                     var eventsPath = Path.Combine(sessionStateDir, id, "events.jsonl");
+                    var yamlPath = Path.Combine(sessionStateDir, id, "workspace.yaml");
                     long fileSize = 0;
                     if (File.Exists(eventsPath))
                         try { fileSize = new FileInfo(eventsPath).Length; } catch { }
                     else
                         continue;
+                    (branch, repository) = SessionBrowser.EnrichCopilotSessionMetadata(yamlPath, eventsPath, branch, repository);
                     results.Add(new BrowserSession(id, summary, cwd, updatedAt, eventsPath, fileSize, branch, repository));
                 }
             }

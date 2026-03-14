@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using XenoAtom.Terminal;
@@ -12,7 +13,7 @@ using static EvalProcessor;
 /// <summary>
 /// Interactive terminal pager built on XenoAtom.Terminal.UI using LogControl.
 /// </summary>
-class XenoPager(ContentRenderer cr, bool noColor, string? filePath, string? filterType, bool expandTools)
+class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool expandTools)
 {
     public PagerAction Run<T>(List<string> headerLines, List<string> contentLines, T parsedData, bool isJsonlFormat, bool noFollow)
     {
@@ -49,14 +50,56 @@ class XenoPager(ContentRenderer cr, bool noColor, string? filePath, string? filt
             .WrapText(false)
             .IsSelectable(true)
             .AutoFocus(true);
+        var logScrollViewerField = typeof(LogControl).GetField("_scrollViewer", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        ScrollViewer? GetLogScrollViewer() => logScrollViewerField?.GetValue(log) as ScrollViewer;
+
+        // Track scroll offset locally to avoid reading ScrollViewer.VerticalOffset,
+        // which conflicts with LogControl's internal ApplyFollowTailIfNeeded write
+        // during the arrange pass (XenoAtom binding tracking forbids read-then-write
+        // on the same property within a single tracking context).
+        int trackedOffset = 0;
+
+        int MaxVerticalOffset()
+        {
+            var scrollViewer = GetLogScrollViewer();
+            if (scrollViewer is null)
+                return 0;
+            return Math.Max(0, log.Count - scrollViewer.ViewportHeight);
+        }
+
+        int GetVerticalOffset() => trackedOffset;
+
+        void SetVerticalOffset(int offset)
+        {
+            var scrollViewer = GetLogScrollViewer();
+            if (scrollViewer is null)
+                return;
+            trackedOffset = Math.Clamp(offset, 0, MaxVerticalOffset());
+            scrollViewer.VerticalOffset = trackedOffset;
+        }
+
+        int PageSize() => Math.Max(1, GetLogScrollViewer()?.ViewportHeight ?? 1);
+        void ScrollByLines(int delta) => SetVerticalOffset(GetVerticalOffset() + delta);
+        void ScrollByPages(int pages) => SetVerticalOffset(GetVerticalOffset() + (PageSize() * pages));
+        void ScrollToTop() => SetVerticalOffset(0);
+        void ScrollToBottom() => SetVerticalOffset(MaxVerticalOffset());
 
         // Populate log with content lines
         void PopulateLog()
         {
+            var previousOffset = GetVerticalOffset();
+            var restoreToBottom = previousOffset >= MaxVerticalOffset();
+
             log.Clear();
             var lines = showInfoOverlay ? headerLines : contentLines;
             foreach (var line in lines)
                 log.AppendLine(StripMarkup(line));
+
+            if (restoreToBottom)
+                ScrollToBottom();
+            else
+                SetVerticalOffset(previousOffset);
         }
         PopulateLog();
 
@@ -211,6 +254,114 @@ class XenoPager(ContentRenderer cr, bool noColor, string? filePath, string? filt
             Execute = _ => log.OpenSearch()
         });
 
+        log.AddCommand(new Command
+        {
+            Id = "Pager.PageUp",
+            LabelMarkup = "Page Up",
+            Gesture = new KeyGesture(TerminalKey.PageUp),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.None,
+            Execute = _ => ScrollByPages(-1)
+        });
+
+        log.AddCommand(new Command
+        {
+            Id = "Pager.PageDown",
+            LabelMarkup = "Page Down",
+            Gesture = new KeyGesture(TerminalKey.PageDown),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.None,
+            Execute = _ => ScrollByPages(1)
+        });
+
+        log.AddCommand(new Command
+        {
+            Id = "Pager.Home",
+            LabelMarkup = "Top",
+            Gesture = new KeyGesture(TerminalKey.Home),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.None,
+            Execute = _ => ScrollToTop()
+        });
+
+        log.AddCommand(new Command
+        {
+            Id = "Pager.End",
+            LabelMarkup = "Bottom",
+            Gesture = new KeyGesture(TerminalKey.End),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.None,
+            Execute = _ => ScrollToBottom()
+        });
+
+        log.AddCommand(new Command
+        {
+            Id = "Pager.LineDown",
+            LabelMarkup = "Line Down",
+            Gesture = new KeyGesture('j'),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.None,
+            Execute = _ => ScrollByLines(1)
+        });
+
+        log.AddCommand(new Command
+        {
+            Id = "Pager.LineUp",
+            LabelMarkup = "Line Up",
+            Gesture = new KeyGesture('k'),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.None,
+            Execute = _ => ScrollByLines(-1)
+        });
+
+        log.AddCommand(new Command
+        {
+            Id = "Pager.GoTop",
+            LabelMarkup = "Top",
+            Gesture = new KeyGesture('g'),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.None,
+            Execute = _ => ScrollToTop()
+        });
+
+        log.AddCommand(new Command
+        {
+            Id = "Pager.GoBottom",
+            LabelMarkup = "Bottom",
+            Gesture = new KeyGesture('G'),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.None,
+            Execute = _ => ScrollToBottom()
+        });
+
+        log.AddCommand(new Command
+        {
+            Id = "Pager.SearchNext",
+            LabelMarkup = "Next Match",
+            Gesture = new KeyGesture('n'),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.None,
+            Execute = _ =>
+            {
+                if (log.MatchCount > 0)
+                    log.GoToNextMatch();
+            }
+        });
+
+        log.AddCommand(new Command
+        {
+            Id = "Pager.SearchPrevious",
+            LabelMarkup = "Previous Match",
+            Gesture = new KeyGesture('N'),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.None,
+            Execute = _ =>
+            {
+                if (log.MatchCount > 0)
+                    log.GoToPreviousMatch();
+            }
+        });
+
         // === Follow mode watcher ===
         if (following && filePath is not null)
         {
@@ -290,8 +441,7 @@ class XenoPager(ContentRenderer cr, bool noColor, string? filePath, string? filt
                 {
                     try
                     {
-                        var doc = JsonDocument.Parse(rawLine);
-                        jdFollow.Events.Add(doc);
+                        using var doc = JsonDocument.Parse(rawLine);
                         var evRoot = doc.RootElement;
                         var evType = SafeGetString(evRoot, "type");
                         var tsStr = SafeGetString(evRoot, "timestamp");
@@ -299,8 +449,9 @@ class XenoPager(ContentRenderer cr, bool noColor, string? filePath, string? filt
                         if (DateTimeOffset.TryParse(tsStr, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dto))
                             ts = dto;
                         if (evType is "user.message" or "assistant.message" or "tool.execution_start" or "tool.result")
-                            jdFollow.Turns.Add((evType, evRoot, ts));
-                        jdFollow.EventCount = jdFollow.Events.Count;
+                            // Keep only the cloned turn payload so follow mode can render without retaining every JsonDocument.
+                            jdFollow.Turns.Add((evType, evRoot.Clone(), ts));
+                        jdFollow.EventCount++;
                     }
                     catch { }
                 }

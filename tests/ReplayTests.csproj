@@ -20,4 +20,8 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.3" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\dotnet-replay.csproj" />
+  </ItemGroup>
+
 </Project>
