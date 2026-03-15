@@ -528,6 +528,7 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
 
                 var props = SessionBrowser.ReadWorkspaceProperties(yamlPath);
                 var id = props.GetValueOrDefault("id", Path.GetFileName(dir));
+                if (knownSessionIds.Contains(id)) continue;
                 var summary = props.GetValueOrDefault("summary", "");
                 var cwd = props.GetValueOrDefault("cwd", "");
                 var updatedStr = props.GetValueOrDefault("updated_at", "");
@@ -574,6 +575,7 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                     {
                         var fileName = Path.GetFileNameWithoutExtension(jsonlFile);
                         if (!Guid.TryParse(fileName, out _)) continue;
+                        if (knownSessionIds.Contains(fileName)) continue;
 
                         try
                         {

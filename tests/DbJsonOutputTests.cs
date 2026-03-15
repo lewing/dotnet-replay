@@ -158,6 +158,8 @@ public class DbJsonOutputTests : IDisposable
         var stderr = process.StandardError.ReadToEnd();
         process.WaitForExit();
 
+        Assert.True(process.ExitCode == 0, $"Process exited with code {process.ExitCode}. stderr: {stderr}");
+
         return (stdout, stderr);
     }
 }
