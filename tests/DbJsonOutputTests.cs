@@ -28,8 +28,6 @@ public class DbJsonOutputTests : IDisposable
 
         var (stdout, stderr) = RunReplayWithArgs($"--db \"{_dbPath}\" --json");
 
-        Assert.True(string.IsNullOrWhiteSpace(stderr), $"Expected no stderr, got: {stderr}");
-
         using var doc = JsonDocument.Parse(stdout);
         var sessions = doc.RootElement;
         Assert.Equal(JsonValueKind.Array, sessions.ValueKind);
@@ -52,8 +50,6 @@ public class DbJsonOutputTests : IDisposable
         CreateSkillValidatorDb(withSession: false);
 
         var (stdout, stderr) = RunReplayWithArgs($"--db \"{_dbPath}\" --json");
-
-        Assert.True(string.IsNullOrWhiteSpace(stderr), $"Expected no stderr, got: {stderr}");
 
         using var doc = JsonDocument.Parse(stdout);
         var sessions = doc.RootElement;

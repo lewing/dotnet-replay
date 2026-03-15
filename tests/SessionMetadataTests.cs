@@ -1,4 +1,3 @@
-using System.Reflection;
 using Xunit;
 
 namespace ReplayTests;
@@ -26,7 +25,7 @@ public class SessionMetadataTests : IDisposable
         File.WriteAllText(yamlPath, "branch: feature/ui\nrepository: lewing/dotnet-replay\n");
         File.WriteAllText(eventsPath, "{}\n");
 
-        var result = InvokeEnrichCopilotSessionMetadata(yamlPath, eventsPath, "", "");
+        var result = SessionBrowser.EnrichCopilotSessionMetadata(yamlPath, eventsPath, "", "");
 
         Assert.Equal("feature/ui", result.Branch);
         Assert.Equal("lewing/dotnet-replay", result.Repository);
@@ -44,7 +43,7 @@ public class SessionMetadataTests : IDisposable
             "\"data\":{\"context\":{\"branch\":\"feature/events\",\"repository\":\"dotnet/runtime\"}}}" +
             "\n");
 
-        var result = InvokeEnrichCopilotSessionMetadata(yamlPath, eventsPath, "", "");
+        var result = SessionBrowser.EnrichCopilotSessionMetadata(yamlPath, eventsPath, "", "");
 
         Assert.Equal("feature/events", result.Branch);
         Assert.Equal("dotnet/runtime", result.Repository);
@@ -62,7 +61,7 @@ public class SessionMetadataTests : IDisposable
             "\"data\":{\"context\":{\"branch\":\"event-branch\",\"repository\":\"event/repo\"}}}" +
             "\n");
 
-        var result = InvokeEnrichCopilotSessionMetadata(yamlPath, eventsPath, "db-branch", "db/repo");
+        var result = SessionBrowser.EnrichCopilotSessionMetadata(yamlPath, eventsPath, "db-branch", "db/repo");
 
         Assert.Equal("db-branch", result.Branch);
         Assert.Equal("db/repo", result.Repository);
@@ -78,36 +77,8 @@ public class SessionMetadataTests : IDisposable
             "\"gitBranch\":\"feature/claude\"}" +
             "\n");
 
-        var branch = InvokeReadClaudeBranch(eventsPath);
+        var branch = SessionBrowser.ReadClaudeBranch(eventsPath);
 
         Assert.Equal("feature/claude", branch);
-    }
-
-    private static (string Branch, string Repository) InvokeEnrichCopilotSessionMetadata(string yamlPath, string eventsPath, string branch, string repository)
-    {
-        var type = LoadSessionBrowserType();
-        var method = type.GetMethod("EnrichCopilotSessionMetadata", BindingFlags.Static | BindingFlags.NonPublic)
-            ?? throw new InvalidOperationException("EnrichCopilotSessionMetadata not found.");
-        var result = method.Invoke(null, [yamlPath, eventsPath, branch, repository])
-            ?? throw new InvalidOperationException("EnrichCopilotSessionMetadata returned null.");
-        var resultType = result.GetType();
-        return (
-            (string)(resultType.GetField("Item1")?.GetValue(result) ?? resultType.GetProperty("Branch")?.GetValue(result) ?? ""),
-            (string)(resultType.GetField("Item2")?.GetValue(result) ?? resultType.GetProperty("Repository")?.GetValue(result) ?? "")
-        );
-    }
-
-    private static string InvokeReadClaudeBranch(string eventsPath)
-    {
-        var type = LoadSessionBrowserType();
-        var method = type.GetMethod("ReadClaudeBranch", BindingFlags.Static | BindingFlags.NonPublic)
-            ?? throw new InvalidOperationException("ReadClaudeBranch not found.");
-        return (string)(method.Invoke(null, [eventsPath]) ?? "");
-    }
-
-    private static Type LoadSessionBrowserType()
-    {
-        var asm = Assembly.Load("dotnet-replay");
-        return asm.GetType("SessionBrowser", throwOnError: true)!;
     }
 }
