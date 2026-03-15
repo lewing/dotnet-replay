@@ -223,7 +223,7 @@ if (dbPath is not null)
         Console.Error.WriteLine("Error: Cannot use --db in redirected output");
         return;
     }
-    filePath = xenoBrowser?.BrowseSessions(dbPath) ?? sessionBrowser.BrowseSessions(dbPath);
+    filePath = xenoBrowser is not null ? xenoBrowser.BrowseSessions(dbPath) : sessionBrowser.BrowseSessions(dbPath);
     if (filePath is null) return;
     // Browser mode: loop between browser and pager
     bool browsing = true;
@@ -233,7 +233,7 @@ if (dbPath is not null)
         switch (action)
         {
             case PagerAction.Browse:
-                filePath = xenoBrowser?.BrowseSessions(dbPath) ?? sessionBrowser.BrowseSessions(dbPath);
+                filePath = xenoBrowser is not null ? xenoBrowser.BrowseSessions(dbPath) : sessionBrowser.BrowseSessions(dbPath);
                 if (filePath is null) browsing = false;
                 break;
             case PagerAction.Resume:
@@ -255,7 +255,7 @@ else if (filePath is null)
         PrintHelp();
         return;
     }
-    filePath = xenoBrowser?.BrowseSessions() ?? sessionBrowser.BrowseSessions();
+    filePath = xenoBrowser is not null ? xenoBrowser.BrowseSessions() : sessionBrowser.BrowseSessions();
     if (filePath is null) return;
     // Browser mode: loop between browser and pager
     bool browsing = true;
@@ -265,7 +265,7 @@ else if (filePath is null)
         switch (action)
         {
             case PagerAction.Browse:
-                filePath = xenoBrowser?.BrowseSessions() ?? sessionBrowser.BrowseSessions();
+                filePath = xenoBrowser is not null ? xenoBrowser.BrowseSessions() : sessionBrowser.BrowseSessions();
                 if (filePath is null) browsing = false;
                 break;
             case PagerAction.Resume:
