@@ -23,6 +23,7 @@ bool streamMode = false;
 bool noFollow = false;
 bool jsonMode = false;
 bool summaryMode = false;
+bool useClassicBrowser = false;
 ContentRenderer? cr = null;
 
 string? dbPath = null;
@@ -69,6 +70,9 @@ for (int i = 0; i < cliArgs.Length; i++)
             if (i + 1 < cliArgs.Length) dbPath = cliArgs[++i];
             else { Console.Error.WriteLine("Error: --db requires a file path"); return; }
             break;
+        case "--classic":
+            useClassicBrowser = true;
+            break;
         default:
             if (cliArgs[i].StartsWith("-")) { Console.Error.WriteLine($"Unknown option: {cliArgs[i]}"); PrintHelp(); return; }
             // Treat .db files as dbPath, not filePath
@@ -98,11 +102,13 @@ mdRenderer = new MarkdownRenderer(noColor);
 colors = new ColorHelper(noColor, full);
 cr = new ContentRenderer(colors, mdRenderer);
 var dataParsers = new DataParsers(tail);
-var pager = new InteractivePager(cr, noColor, filePath, filterType, expandTools);
+var pager = useClassicBrowser ? new InteractivePager(cr, noColor, filePath, filterType, expandTools) : null;
+var xenoPager = useClassicBrowser ? null : new XenoPager(cr, filePath, filterType, expandTools);
 var outputFormatters = new OutputFormatters(full);
 var statsAnalyzer = new StatsAnalyzer(dataParsers.ParseJsonlData, dataParsers.ParseClaudeData, dataParsers.ParseWazaData);
 var sessionStateDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".copilot", "session-state");
 var sessionBrowser = new SessionBrowser(cr, dataParsers, sessionStateDir);
+var xenoBrowser = useClassicBrowser ? null : new XenoSessionBrowser(cr, dataParsers, sessionStateDir);
 
 // --- Stats command dispatch ---
 if (cliArgs.Length > 0 && cliArgs[0] == "stats")
@@ -209,15 +215,28 @@ if (filePath is not null && Guid.TryParse(filePath, out _) && !File.Exists(fileP
     }
 }
 
-// If dbPath is set, go directly to browser mode with that DB
+// If dbPath is set, either export the DB contents or browse it interactively.
 if (dbPath is not null)
 {
+    if (jsonMode)
+    {
+        var dbSessions = sessionBrowser.LoadSessionsFromDb(sessionStateDir, dbPath);
+        if (dbSessions is null)
+        {
+            Console.Error.WriteLine($"Error: Could not load sessions from database: {dbPath}");
+            return;
+        }
+
+        outputFormatters.OutputSessionListJson(dbSessions);
+        return;
+    }
+
     if (Console.IsOutputRedirected)
     {
         Console.Error.WriteLine("Error: Cannot use --db in redirected output");
         return;
     }
-    filePath = sessionBrowser.BrowseSessions(dbPath);
+    filePath = xenoBrowser is not null ? xenoBrowser.BrowseSessions(dbPath) : sessionBrowser.BrowseSessions(dbPath);
     if (filePath is null) return;
     // Browser mode: loop between browser and pager
     bool browsing = true;
@@ -227,11 +246,12 @@ if (dbPath is not null)
         switch (action)
         {
             case PagerAction.Browse:
-                filePath = sessionBrowser.BrowseSessions(dbPath);
+                filePath = xenoBrowser is not null ? xenoBrowser.BrowseSessions(dbPath) : sessionBrowser.BrowseSessions(dbPath);
                 if (filePath is null) browsing = false;
                 break;
             case PagerAction.Resume:
-                sessionBrowser.LaunchResume(filePath!);
+                if (xenoBrowser is not null) xenoBrowser.LaunchResume(filePath!);
+                else sessionBrowser.LaunchResume(filePath!);
                 browsing = false;
                 break;
             default:
@@ -248,7 +268,7 @@ else if (filePath is null)
         PrintHelp();
         return;
     }
-    filePath = sessionBrowser.BrowseSessions();
+    filePath = xenoBrowser is not null ? xenoBrowser.BrowseSessions() : sessionBrowser.BrowseSessions();
     if (filePath is null) return;
     // Browser mode: loop between browser and pager
     bool browsing = true;
@@ -258,11 +278,12 @@ else if (filePath is null)
         switch (action)
         {
             case PagerAction.Browse:
-                filePath = sessionBrowser.BrowseSessions();
+                filePath = xenoBrowser is not null ? xenoBrowser.BrowseSessions() : sessionBrowser.BrowseSessions();
                 if (filePath is null) browsing = false;
                 break;
             case PagerAction.Resume:
-                sessionBrowser.LaunchResume(filePath!);
+                if (xenoBrowser is not null) xenoBrowser.LaunchResume(filePath!);
+                else sessionBrowser.LaunchResume(filePath!);
                 browsing = false;
                 break;
             default:
@@ -285,6 +306,11 @@ string Bold(string s) => noColor ? s : $"[bold]{Markup.Escape(s)}[/]";
 string Cyan(string s) => noColor ? s : $"[cyan]{Markup.Escape(s)}[/]";
 
 // --- OpenFile: format detection + pager, returns action ---
+PagerAction RunPager<T>(List<string> headerLines, List<string> contentLines, T parsedData, bool isJsonlFormat, bool noFollow) =>
+    xenoPager is not null
+        ? xenoPager.Run(headerLines, contentLines, parsedData, isJsonlFormat, noFollow)
+        : pager!.Run(headerLines, contentLines, parsedData, isJsonlFormat, noFollow);
+
 PagerAction OpenFile(string path)
 {
     if (!File.Exists(path)) { Console.Error.WriteLine($"Error: File not found: {path}"); return PagerAction.Quit; }
@@ -402,7 +428,7 @@ PagerAction OpenFile(string path)
             if (parsed is null) return PagerAction.Quit;
             headerLines = cr!.RenderEvalHeaderLines(parsed);
             contentLines = cr!.RenderEvalContentLines(parsed, filterType, expandTools);
-            return pager.Run(headerLines, contentLines, parsed, isJsonlFormat: true, noFollow: noFollow);
+            return RunPager(headerLines, contentLines, parsed, isJsonlFormat: true, noFollow: noFollow);
         }
         else if (isJsonl)
         {
@@ -410,14 +436,14 @@ PagerAction OpenFile(string path)
             if (parsed is null) return PagerAction.Quit;
             headerLines = cr!.RenderJsonlHeaderLines(parsed);
             contentLines = cr!.RenderJsonlContentLines(parsed, filterType, expandTools);
-            return pager.Run(headerLines, contentLines, parsed, isJsonlFormat: !isClaude, noFollow: isClaude || noFollow);
+            return RunPager(headerLines, contentLines, parsed, isJsonlFormat: !isClaude, noFollow: isClaude || noFollow);
         }
         else if (isWaza)
         {
             var parsed = dataParsers.ParseWazaData(wazaDoc!);
             headerLines = cr!.RenderWazaHeaderLines(parsed);
             contentLines = cr!.RenderWazaContentLines(parsed, filterType, expandTools);
-            return pager.Run(headerLines, contentLines, parsed, isJsonlFormat: false, noFollow: true);
+            return RunPager(headerLines, contentLines, parsed, isJsonlFormat: false, noFollow: true);
         }
         return PagerAction.Quit;
     }
@@ -596,6 +622,8 @@ void PrintHelp()
 
     Options:
       --db <path>         Browse sessions from a session-store.db or skill-validator sessions.db
+                          (combine with --json to export session metadata non-interactively)
+      --classic            Use classic Spectre.Console browser instead of XenoAtom.Terminal.UI
       --tail <N>          Show only the last N conversation turns
       --expand-tools      Show tool arguments, results, and thinking/reasoning
       --full              Don't truncate tool output (use with --expand-tools)

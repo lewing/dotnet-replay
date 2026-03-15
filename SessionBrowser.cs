@@ -44,6 +44,86 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
         catch { return SessionDbType.Unknown; }
     }
 
+    internal static Dictionary<string, string> ReadWorkspaceProperties(string yamlPath)
+    {
+        Dictionary<string, string> props = [];
+        if (!File.Exists(yamlPath)) return props;
+
+        try
+        {
+            foreach (var line in File.ReadLines(yamlPath))
+            {
+                var colonIdx = line.IndexOf(':');
+                if (colonIdx <= 0) continue;
+                var key = line[..colonIdx].Trim();
+                var value = line[(colonIdx + 1)..].Trim().Trim('"');
+                props[key] = value;
+            }
+        }
+        catch { }
+
+        return props;
+    }
+
+    internal static (string Branch, string Repository) EnrichCopilotSessionMetadata(
+        string yamlPath,
+        string eventsPath,
+        string branch,
+        string repository)
+    {
+        if (string.IsNullOrEmpty(branch) || string.IsNullOrEmpty(repository))
+        {
+            var props = ReadWorkspaceProperties(yamlPath);
+            if (string.IsNullOrEmpty(branch)) branch = props.GetValueOrDefault("branch", "");
+            if (string.IsNullOrEmpty(repository)) repository = props.GetValueOrDefault("repository", "");
+        }
+
+        if ((!string.IsNullOrEmpty(branch) && !string.IsNullOrEmpty(repository)) || !File.Exists(eventsPath))
+            return (branch, repository);
+
+        try
+        {
+            foreach (var line in File.ReadLines(eventsPath).Take(10))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                using var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
+                if (SafeGetString(root, "type") == "session.start"
+                    && root.TryGetProperty("data", out var data)
+                    && data.TryGetProperty("context", out var context))
+                {
+                    if (string.IsNullOrEmpty(branch)) branch = SafeGetString(context, "branch");
+                    if (string.IsNullOrEmpty(repository)) repository = SafeGetString(context, "repository");
+                    if (!string.IsNullOrEmpty(branch) && !string.IsNullOrEmpty(repository))
+                        break;
+                }
+            }
+        }
+        catch { }
+
+        return (branch, repository);
+    }
+
+    internal static string ReadClaudeBranch(string eventsPath)
+    {
+        if (!File.Exists(eventsPath)) return "";
+
+        try
+        {
+            foreach (var line in File.ReadLines(eventsPath).Take(10))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                using var doc = JsonDocument.Parse(line);
+                var branch = SafeGetString(doc.RootElement, "gitBranch");
+                if (!string.IsNullOrEmpty(branch))
+                    return branch;
+            }
+        }
+        catch { }
+
+        return "";
+    }
+
     public List<BrowserSession>? LoadSessionsFromDb(string sessionStateDir, string? dbPathOverride = null)
     {
         var dbPath = dbPathOverride ?? Path.Combine(Path.GetDirectoryName(sessionStateDir)!, "session-store.db");
@@ -106,12 +186,14 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                     DateTime.TryParse(updatedStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var updatedAt);
 
                     var eventsPath = Path.Combine(sessionStateDir, id, "events.jsonl");
+                    var yamlPath = Path.Combine(sessionStateDir, id, "workspace.yaml");
                     long fileSize = 0;
                     if (File.Exists(eventsPath))
                         try { fileSize = new FileInfo(eventsPath).Length; } catch { }
                     else
                         continue; // skip DB entries without local transcript files
 
+                    (branch, repository) = EnrichCopilotSessionMetadata(yamlPath, eventsPath, branch, repository);
                     results.Add(new BrowserSession(id, summary, cwd, updatedAt, eventsPath, fileSize, branch, repository));
                 }
             }
@@ -277,34 +359,22 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                     var eventsPath = Path.Combine(dir, "events.jsonl");
                     if (!File.Exists(yamlPath) || !File.Exists(eventsPath)) continue;
 
-                    Dictionary<string, string> props = [];
-                    try
-                    {
-                        foreach (var line in File.ReadLines(yamlPath))
-                        {
-                            var colonIdx = line.IndexOf(':');
-                            if (colonIdx > 0)
-                            {
-                                var key = line[..colonIdx].Trim();
-                                var value = line[(colonIdx + 1)..].Trim().Trim('"');
-                                props[key] = value;
-                            }
-                        }
-                    }
-                    catch { continue; }
-
+                    var props = ReadWorkspaceProperties(yamlPath);
                     var id = props.GetValueOrDefault("id", Path.GetFileName(dir));
                     var summary = props.GetValueOrDefault("summary", "");
                     var cwd = props.GetValueOrDefault("cwd", "");
                     var updatedStr = props.GetValueOrDefault("updated_at", "");
+                    var branch = props.GetValueOrDefault("branch", "");
+                    var repository = props.GetValueOrDefault("repository", "");
                     DateTime.TryParse(updatedStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var updatedAt);
 
                     long fileSize = 0;
                     try { fileSize = new FileInfo(eventsPath).Length; } catch { }
 
+                    (branch, repository) = EnrichCopilotSessionMetadata(yamlPath, eventsPath, branch, repository);
                     lock (sessionsLock)
                     {
-                        allSessions.Add(new BrowserSession(id, summary, cwd, updatedAt, eventsPath, fileSize, "", ""));
+                        allSessions.Add(new BrowserSession(id, summary, cwd, updatedAt, eventsPath, fileSize, branch, repository));
                         knownSessionIds.Add(id);
                         if (allSessions.Count % 50 == 0)
                             allSessions.Sort((a, b) => b.UpdatedAt.CompareTo(a.UpdatedAt));
@@ -351,9 +421,10 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                             if (claudeSummary == "") claudeSummary = Path.GetFileName(projDir).Replace("-", "\\");
 
                             long fileSize = new FileInfo(jsonlFile).Length;
+                            var claudeBranch = ReadClaudeBranch(jsonlFile);
                             lock (sessionsLock)
                             {
-                                allSessions.Add(new BrowserSession(claudeId, claudeSummary, claudeCwd, claudeUpdatedAt, jsonlFile, fileSize, "", ""));
+                                allSessions.Add(new BrowserSession(claudeId, claudeSummary, claudeCwd, claudeUpdatedAt, jsonlFile, fileSize, claudeBranch, ""));
                                 if (allSessions.Count % 50 == 0)
                                     allSessions.Sort((a, b) => b.UpdatedAt.CompareTo(a.UpdatedAt));
                             }
@@ -401,12 +472,14 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                             DateTime.TryParse(updatedStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var updatedAt);
                             
                             var eventsPath = Path.Combine(sessionStateDir!, id, "events.jsonl");
+                            var yamlPath = Path.Combine(sessionStateDir!, id, "workspace.yaml");
                             long fileSize = 0;
                             if (File.Exists(eventsPath))
                                 try { fileSize = new FileInfo(eventsPath).Length; } catch { }
                             else
                                 continue;
-                            
+
+                            (branch, repository) = EnrichCopilotSessionMetadata(yamlPath, eventsPath, branch, repository);
                             newSessions.Add(new BrowserSession(id, summary, cwd, updatedAt, eventsPath, fileSize, branch, repository));
                             knownSessionIds.Add(id);
                             if (updatedAt > lastUpdatedAt) lastUpdatedAt = updatedAt;
@@ -1028,6 +1101,8 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
             Console.Error.WriteLine("Make sure 'copilot' or 'gh copilot' is installed and available in your PATH.");
         }
     }
+
+    public static bool CanRunStatic(string command) => CanRun(command);
 
     static bool CanRun(string command)
     {

@@ -259,4 +259,52 @@ class OutputFormatters(bool full)
             }
         }
     }
+
+    public void OutputSessionListJson(IEnumerable<BrowserSession> sessions)
+    {
+        var json = sessions.Select(s => new DbSessionOutput(
+            id: s.Id,
+            db_type: s.DbType switch
+            {
+                SessionDbType.SkillValidator => "skill-validator",
+                SessionDbType.CopilotCli => "copilot-cli",
+                _ => "unknown"
+            },
+            summary: s.Summary,
+            cwd: s.Cwd,
+            updated_at: s.UpdatedAt == default ? null : s.UpdatedAt.ToString("o"),
+            events_path: s.EventsPath,
+            file_size: s.FileSize,
+            has_transcript: !string.IsNullOrEmpty(s.EventsPath) && File.Exists(s.EventsPath),
+            branch: s.Branch,
+            repository: s.Repository,
+            skill_name: s.SkillName,
+            scenario_name: s.ScenarioName,
+            role: s.Role,
+            model: s.Model,
+            status: s.Status,
+            prompt: s.Prompt,
+            metrics: ParseNestedJson(s.MetricsJson),
+            judge: ParseNestedJson(s.JudgeJson),
+            pairwise: ParseNestedJson(s.PairwiseJson)))
+            .ToArray();
+
+        Console.WriteLine(JsonSerializer.Serialize(json, ColorHelper.SummarySerializer));
+    }
+
+    static JsonElement? ParseNestedJson(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.Clone();
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }
