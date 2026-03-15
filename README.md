@@ -77,6 +77,7 @@ replay <file> --json                    # Output as structured JSONL
 replay <file> --json --filter user      # JSON output of user messages only
 replay <file> --json --tail 5           # JSON output of last 5 turns
 replay <file> --json --expand-tools     # Include tool args/results in JSON
+replay --db sessions.db --json          # Export DB session metadata as JSON
 
 replay <file> --summary                 # Show high-level session statistics
 replay <file> --summary --json          # Summary as machine-readable JSON

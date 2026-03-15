@@ -459,6 +459,7 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
         finally
         {
             watcher?.Dispose();
+            Console.Write("\x1b[0m");
             Console.ResetColor();
             Console.CursorVisible = true;
         }

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 
 // ========== Parsed data structures ==========
 record JsonlData(
@@ -115,6 +116,27 @@ record WazaSummary(
     string model,
     double aggregate_score,
     ValidationOutput[] validations);
+
+record DbSessionOutput(
+    string id,
+    string db_type,
+    string summary,
+    string cwd,
+    string? updated_at,
+    string events_path,
+    long file_size,
+    bool has_transcript,
+    string branch,
+    string repository,
+    string? skill_name = null,
+    string? scenario_name = null,
+    string? role = null,
+    string? model = null,
+    string? status = null,
+    string? prompt = null,
+    JsonElement? metrics = null,
+    JsonElement? judge = null,
+    JsonElement? pairwise = null);
 
 // ========== Stats output records ==========
 record BatchSummary(

@@ -351,6 +351,7 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             });
         }
 
+        Console.Write("\x1b[0m");
         Console.ResetColor();
         Console.CursorVisible = true;
 

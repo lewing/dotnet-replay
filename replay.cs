@@ -215,9 +215,22 @@ if (filePath is not null && Guid.TryParse(filePath, out _) && !File.Exists(fileP
     }
 }
 
-// If dbPath is set, go directly to browser mode with that DB
+// If dbPath is set, either export the DB contents or browse it interactively.
 if (dbPath is not null)
 {
+    if (jsonMode)
+    {
+        var dbSessions = sessionBrowser.LoadSessionsFromDb(sessionStateDir, dbPath);
+        if (dbSessions is null)
+        {
+            Console.Error.WriteLine($"Error: Could not load sessions from database: {dbPath}");
+            return;
+        }
+
+        outputFormatters.OutputSessionListJson(dbSessions);
+        return;
+    }
+
     if (Console.IsOutputRedirected)
     {
         Console.Error.WriteLine("Error: Cannot use --db in redirected output");
@@ -609,6 +622,7 @@ void PrintHelp()
 
     Options:
       --db <path>         Browse sessions from a session-store.db or skill-validator sessions.db
+                          (combine with --json to export session metadata non-interactively)
       --classic            Use classic Spectre.Console browser instead of XenoAtom.Terminal.UI
       --tail <N>          Show only the last N conversation turns
       --expand-tools      Show tool arguments, results, and thinking/reasoning
