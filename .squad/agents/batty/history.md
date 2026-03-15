@@ -30,6 +30,16 @@
 
 <!-- Append new learnings below. Each entry is something lasting about the project. -->
 
+### 2026-03-15: XenoSessionBrowser preview pane collapse
+- In `XenoSessionBrowser.cs`, toggling a preview pane with `IsVisible` alone is not enough to restore the session list to full width inside the XenoAtom `HStack`; the hidden pane can still hold layout space.
+- To fully collapse the preview and let the `DataGrid` expand again, change the preview pane's width constraint when toggling (`MaxWidth = 0` when hidden, restore the fixed pane width when shown).
+- When hiding the preview, also invalidate any in-flight preview generation and clear pending preview text so stale worker output does not repopulate a collapsed pane.
+
+### 2026-03-15: PR #149 review fixes in skill-validator
+- `eng/skill-validator` rejudge runs cannot infer the original judge from `sessions.model`; the durable source is `schema_info["judge_model"]`, and rejudge should require `--judge-model` when that metadata is missing.
+- Rejudge judge sessions must use fresh temporary working directories instead of persisted run `WorkDir` values, because `ValidateCommand` always cleans agent work dirs via `AgentRunner.CleanupWorkDirs()` even when `--keep-sessions` preserves the session artifacts.
+- `SessionDatabase.ComputeDirectorySha()` must frame each relative path and file payload with explicit lengths; concatenating raw path bytes and file bytes makes distinct directory layouts collide.
+
 ### 2026-03-14: XenoPager Phase 2 complete — horizontal scroll & status bar
 - Horizontal scrolling implemented with `h`/`l`/`0` keys (left/right/reset) using binding-safe `trackedHorizontalOffset` pattern, matching the existing `trackedOffset` vertical scroll workaround.
 - Status bar header now displays: line position (e.g., "Line 45/123"), column indicator ("Col X+"), search match count ("Match 3/15" in search mode), filter status, and follow mode toggle state.

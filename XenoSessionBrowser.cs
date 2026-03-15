@@ -154,11 +154,13 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             .HorizontalAlignment(Align.Stretch)
             .VerticalAlignment(Align.Stretch);
 
+        const int previewPaneWidth = 60;
+
         var previewBorder = new Border(previewScroll)
             .Style(BorderStyle.Single)
             .HorizontalAlignment(Align.Stretch)
             .VerticalAlignment(Align.Stretch);
-        previewBorder.MaxWidth = 60;
+        previewBorder.MaxWidth = 0;
         previewBorder.IsVisible = false;
 
         var content = new HStack(
@@ -166,6 +168,18 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                 previewBorder)
             .HorizontalAlignment(Align.Stretch)
             .VerticalAlignment(Align.Stretch);
+
+        void UpdatePreviewLayout(bool isVisible)
+        {
+            previewBorder.MaxWidth = isVisible ? previewPaneWidth : 0;
+            previewBorder.IsVisible = isVisible;
+            if (!isVisible)
+            {
+                Interlocked.Increment(ref _previewGeneration);
+                Volatile.Write(ref pendingPreviewText, null);
+                previewStack.Children.Clear();
+            }
+        }
 
         var root = new DockLayout()
             .Top(header)
@@ -256,7 +270,7 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             Execute = _ =>
             {
                 showPreview.Value = !showPreview.Value;
-                previewBorder.IsVisible = showPreview.Value;
+                UpdatePreviewLayout(showPreview.Value);
                 if (showPreview.Value) lastSelectedRow = -1; // force refresh
             }
         });
