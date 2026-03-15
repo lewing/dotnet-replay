@@ -280,19 +280,12 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             }
         });
 
-        // Background session loading
+        // Background session loading — queue results for UI thread to apply
+        var pendingSessions = new System.Collections.Concurrent.ConcurrentQueue<List<BrowserSession>>();
         var scanThread = new Thread(() => LoadAllSessions(
             dbPathOverride, allSessions, sessionsLock,
             ref scanComplete, ref isSkillDb,
-            (sessions) =>
-            {
-                using (doc.BeginUpdate())
-                {
-                    foreach (var s in sessions)
-                        doc.AddRow(MakeRow(s));
-                }
-                sessionCount.Value = doc.Rows.Count;
-            }));
+            (sessions) => pendingSessions.Enqueue(sessions)));
         scanThread.IsBackground = true;
         scanThread.Start();
 
@@ -303,6 +296,17 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             {
                 if (exitRequested)
                     return TerminalLoopResult.Stop;
+
+                // Apply any sessions queued by the background scan thread
+                while (pendingSessions.TryDequeue(out var batch))
+                {
+                    using (doc.BeginUpdate())
+                    {
+                        foreach (var s in batch)
+                            doc.AddRow(MakeRow(s));
+                    }
+                    sessionCount.Value = doc.Rows.Count;
+                }
 
                 // Load preview text off the UI thread and hand completed text back to the next frame.
                 if (showPreview.Value)
@@ -743,6 +747,8 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                             }
                         }
                     }
+                    if (!File.Exists(eventsPath))
+                        eventsPath = "";
                     if (File.Exists(eventsPath))
                         try { fileSize = new FileInfo(eventsPath).Length; } catch { }
                 }
