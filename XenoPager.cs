@@ -54,11 +54,12 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
 
         ScrollViewer? GetLogScrollViewer() => logScrollViewerField?.GetValue(log) as ScrollViewer;
 
-        // Track scroll offset locally to avoid reading ScrollViewer.VerticalOffset,
-        // which conflicts with LogControl's internal ApplyFollowTailIfNeeded write
-        // during the arrange pass (XenoAtom binding tracking forbids read-then-write
-        // on the same property within a single tracking context).
+        // Track scroll offsets locally to avoid reading ScrollViewer offsets,
+        // which conflicts with LogControl's internal write behavior during arrange
+        // passes (XenoAtom binding tracking forbids read-then-write on the same
+        // property within a single tracking context).
         int trackedOffset = 0;
+        int trackedHorizontalOffset = 0;
 
         int MaxVerticalOffset()
         {
@@ -69,6 +70,7 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
         }
 
         int GetVerticalOffset() => trackedOffset;
+        int GetHorizontalOffset() => trackedHorizontalOffset;
 
         void SetVerticalOffset(int offset)
         {
@@ -77,6 +79,15 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
                 return;
             trackedOffset = Math.Clamp(offset, 0, MaxVerticalOffset());
             scrollViewer.VerticalOffset = trackedOffset;
+        }
+
+        void SetHorizontalOffset(int offset)
+        {
+            var scrollViewer = GetLogScrollViewer();
+            if (scrollViewer is null)
+                return;
+            trackedHorizontalOffset = Math.Max(0, offset);
+            scrollViewer.HorizontalOffset = trackedHorizontalOffset;
         }
 
         int PageSize() => Math.Max(1, GetLogScrollViewer()?.ViewportHeight ?? 1);
@@ -100,6 +111,8 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
                 ScrollToBottom();
             else
                 SetVerticalOffset(previousOffset);
+
+            SetHorizontalOffset(GetHorizontalOffset());
         }
         PopulateLog();
 
@@ -120,8 +133,12 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
             .Left(new TextBlock(() =>
             {
                 var statusFilter = filterIndex == 0 ? "all" : filterCycle[filterIndex];
+                var totalLines = log.Count;
+                var currentLine = totalLines == 0 ? 0 : Math.Min(totalLines, GetVerticalOffset() + 1);
+                var colIndicator = trackedHorizontalOffset > 0 ? $" Col {trackedHorizontalOffset}+" : "";
+                var searchInfo = log.MatchCount > 0 ? $" ({log.MatchCount} matches)" : "";
                 var followIndicator = following ? " LIVE" : "";
-                return $"{infoBar} | Filter: {statusFilter}{followIndicator}";
+                return $"Line {currentLine}/{totalLines}{colIndicator}{searchInfo} | Filter: {statusFilter}{followIndicator} | {infoBar}";
             }));
 
         // Info overlay panel (hidden by default)
@@ -336,6 +353,36 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
 
         log.AddCommand(new Command
         {
+            Id = "Pager.ScrollLeft",
+            LabelMarkup = "Left",
+            Gesture = new KeyGesture('h'),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.None,
+            Execute = _ => SetHorizontalOffset(GetHorizontalOffset() - 8)
+        });
+
+        log.AddCommand(new Command
+        {
+            Id = "Pager.ScrollRight",
+            LabelMarkup = "Right",
+            Gesture = new KeyGesture('l'),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.None,
+            Execute = _ => SetHorizontalOffset(GetHorizontalOffset() + 8)
+        });
+
+        log.AddCommand(new Command
+        {
+            Id = "Pager.ScrollColumnStart",
+            LabelMarkup = "Column 0",
+            Gesture = new KeyGesture('0'),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.None,
+            Execute = _ => SetHorizontalOffset(0)
+        });
+
+        log.AddCommand(new Command
+        {
             Id = "Pager.SearchNext",
             LabelMarkup = "Next Match",
             Gesture = new KeyGesture('n'),
@@ -412,6 +459,8 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
         finally
         {
             watcher?.Dispose();
+            Console.ResetColor();
+            Console.CursorVisible = true;
         }
 
         return result;

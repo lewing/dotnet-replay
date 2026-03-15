@@ -297,57 +297,62 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
         scanThread.Start();
 
         // Run the fullscreen UI
-        using var session = Terminal.Open();
-        Terminal.Run(toastHost, () =>
+        using (var session = Terminal.Open())
         {
-            if (exitRequested)
-                return TerminalLoopResult.Stop;
-
-            // Load preview text off the UI thread and hand completed text back to the next frame.
-            if (showPreview.Value)
+            Terminal.Run(toastHost, () =>
             {
-                var currentRow = grid.CurrentCell.Row;
-                if (currentRow != lastSelectedRow)
-                {
-                    lastSelectedRow = currentRow;
-                    var generation = Interlocked.Increment(ref _previewGeneration);
-                    Volatile.Write(ref pendingPreviewText, null);
-                    previewStack.Children.Clear();
-                    previewStack.Children.Add(new TextBlock("Loading..."));
+                if (exitRequested)
+                    return TerminalLoopResult.Stop;
 
-                    var row = GetSelectedRow();
-                    if (row?.Source is not null)
+                // Load preview text off the UI thread and hand completed text back to the next frame.
+                if (showPreview.Value)
+                {
+                    var currentRow = grid.CurrentCell.Row;
+                    if (currentRow != lastSelectedRow)
                     {
-                        var source = row.Source;
-                        previewThread = new Thread(() =>
+                        lastSelectedRow = currentRow;
+                        var generation = Interlocked.Increment(ref _previewGeneration);
+                        Volatile.Write(ref pendingPreviewText, null);
+                        previewStack.Children.Clear();
+                        previewStack.Children.Add(new TextBlock("Loading..."));
+
+                        var row = GetSelectedRow();
+                        if (row?.Source is not null)
                         {
-                            var text = BuildPreviewText(source, generation);
-                            if (Volatile.Read(ref _previewGeneration) == generation)
-                                Volatile.Write(ref pendingPreviewText, text);
-                        })
+                            var source = row.Source;
+                            previewThread = new Thread(() =>
+                            {
+                                var text = BuildPreviewText(source, generation);
+                                if (Volatile.Read(ref _previewGeneration) == generation)
+                                    Volatile.Write(ref pendingPreviewText, text);
+                            })
+                            {
+                                IsBackground = true
+                            };
+                            previewThread.Start();
+                        }
+                        else
                         {
-                            IsBackground = true
-                        };
-                        previewThread.Start();
-                    }
-                    else
-                    {
-                        Volatile.Write(ref pendingPreviewText, "");
+                            Volatile.Write(ref pendingPreviewText, "");
+                        }
                     }
                 }
-            }
 
-            var completedPreviewText = Volatile.Read(ref pendingPreviewText);
-            if (completedPreviewText is not null)
-            {
-                Volatile.Write(ref pendingPreviewText, null);
-                previewStack.Children.Clear();
-                foreach (var line in completedPreviewText.Split('\n'))
-                    previewStack.Children.Add(new TextBlock(line));
-            }
+                var completedPreviewText = Volatile.Read(ref pendingPreviewText);
+                if (completedPreviewText is not null)
+                {
+                    Volatile.Write(ref pendingPreviewText, null);
+                    previewStack.Children.Clear();
+                    foreach (var line in completedPreviewText.Split('\n'))
+                        previewStack.Children.Add(new TextBlock(line));
+                }
 
-            return TerminalLoopResult.Continue;
-        });
+                return TerminalLoopResult.Continue;
+            });
+        }
+
+        Console.ResetColor();
+        Console.CursorVisible = true;
 
         if (resumeRequested && selectedPath is not null)
         {
