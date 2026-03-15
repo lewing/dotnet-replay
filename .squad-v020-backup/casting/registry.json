@@ -1,0 +1,28 @@
+{
+  "agents": {
+    "deckard": {
+      "persistent_name": "Deckard",
+      "universe": "Blade Runner",
+      "role": "Lead",
+      "created_at": "2026-02-24T01:39:00Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "batty": {
+      "persistent_name": "Batty",
+      "universe": "Blade Runner",
+      "role": "Core Dev",
+      "created_at": "2026-02-24T01:39:00Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "rachael": {
+      "persistent_name": "Rachael",
+      "universe": "Blade Runner",
+      "role": "Tester",
+      "created_at": "2026-02-24T01:39:00Z",
+      "legacy_named": false,
+      "status": "active"
+    }
+  }
+}
