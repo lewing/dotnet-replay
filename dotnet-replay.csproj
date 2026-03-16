@@ -8,13 +8,14 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>replay</ToolCommandName>
     <PackageId>dotnet-replay</PackageId>
-    <Version>0.8.0</Version>
+    <Version>0.8.1</Version>
     <Authors>Larry Ewing</Authors>
     <Description>Interactive transcript viewer for Copilot CLI sessions and waza evaluations</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/lewing/dotnet-replay</RepositoryUrl>
     <PackageTags>copilot;transcript;viewer;waza;evaluation;cli</PackageTags>
     <PublishAot>false</PublishAot>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,6 +27,10 @@
     <PackageReference Include="Markdig" Version="0.40.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.3" />
     <PackageReference Include="XenoAtom.Terminal.UI" Version="1.3.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
   <ItemGroup>
