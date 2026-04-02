@@ -25,7 +25,7 @@ public class SessionMetadataTests : IDisposable
         File.WriteAllText(yamlPath, "branch: feature/ui\nrepository: lewing/dotnet-replay\n");
         File.WriteAllText(eventsPath, "{}\n");
 
-        var result = SessionBrowser.EnrichCopilotSessionMetadata(yamlPath, eventsPath, "", "");
+        var result = SessionUtils.EnrichCopilotSessionMetadata(yamlPath, eventsPath, "", "");
 
         Assert.Equal("feature/ui", result.Branch);
         Assert.Equal("lewing/dotnet-replay", result.Repository);
@@ -43,7 +43,7 @@ public class SessionMetadataTests : IDisposable
             "\"data\":{\"context\":{\"branch\":\"feature/events\",\"repository\":\"dotnet/runtime\"}}}" +
             "\n");
 
-        var result = SessionBrowser.EnrichCopilotSessionMetadata(yamlPath, eventsPath, "", "");
+        var result = SessionUtils.EnrichCopilotSessionMetadata(yamlPath, eventsPath, "", "");
 
         Assert.Equal("feature/events", result.Branch);
         Assert.Equal("dotnet/runtime", result.Repository);
@@ -61,7 +61,7 @@ public class SessionMetadataTests : IDisposable
             "\"data\":{\"context\":{\"branch\":\"event-branch\",\"repository\":\"event/repo\"}}}" +
             "\n");
 
-        var result = SessionBrowser.EnrichCopilotSessionMetadata(yamlPath, eventsPath, "db-branch", "db/repo");
+        var result = SessionUtils.EnrichCopilotSessionMetadata(yamlPath, eventsPath, "db-branch", "db/repo");
 
         Assert.Equal("db-branch", result.Branch);
         Assert.Equal("db/repo", result.Repository);
@@ -77,7 +77,7 @@ public class SessionMetadataTests : IDisposable
             "\"gitBranch\":\"feature/claude\"}" +
             "\n");
 
-        var branch = SessionBrowser.ReadClaudeBranch(eventsPath);
+        var branch = SessionUtils.ReadClaudeBranch(eventsPath);
 
         Assert.Equal("feature/claude", branch);
     }

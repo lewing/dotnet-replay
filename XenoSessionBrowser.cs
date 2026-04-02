@@ -758,7 +758,7 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                 var eventsPath = Path.Combine(dir, "events.jsonl");
                 if (!File.Exists(yamlPath) || !File.Exists(eventsPath)) continue;
 
-                var props = SessionBrowser.ReadWorkspaceProperties(yamlPath);
+                var props = SessionUtils.ReadWorkspaceProperties(yamlPath);
                 var id = props.GetValueOrDefault("id", Path.GetFileName(dir));
                 if (knownSessionIds.Contains(id)) continue;
                 var summary = props.GetValueOrDefault("summary", "");
@@ -771,7 +771,7 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                 long fileSize = 0;
                 try { fileSize = new FileInfo(eventsPath).Length; } catch { }
 
-                (branch, repository) = SessionBrowser.EnrichCopilotSessionMetadata(yamlPath, eventsPath, branch, repository);
+                (branch, repository) = SessionUtils.EnrichCopilotSessionMetadata(yamlPath, eventsPath, branch, repository);
                 var session = new BrowserSession(id, summary, cwd, updatedAt, eventsPath, fileSize, branch, repository);
                 lock (sessionsLock)
                 {
@@ -831,7 +831,7 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                             if (claudeSummary == "") claudeSummary = Path.GetFileName(projDir).Replace("-", "\\");
 
                             long fileSize = new FileInfo(jsonlFile).Length;
-                            var claudeBranch = SessionBrowser.ReadClaudeBranch(jsonlFile);
+                            var claudeBranch = SessionUtils.ReadClaudeBranch(jsonlFile);
                             var session = new BrowserSession(claudeId, claudeSummary, claudeCwd, claudeUpdatedAt, jsonlFile, fileSize, claudeBranch, "");
                             lock (sessionsLock)
                             {
@@ -854,11 +854,11 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
         scanComplete = true;
     }
 
-    // DB loading methods (reuse schema detection from SessionBrowser)
-    List<BrowserSession>? LoadSessionsFromDb(string sessionStateDir, string? dbPathOverride = null)
+    // DB loading methods
+    public List<BrowserSession>? LoadSessionsFromDb(string sessionStateDir, string? dbPathOverride = null)
     {
         var dbPath = dbPathOverride ?? Path.Combine(Path.GetDirectoryName(sessionStateDir)!, "session-store.db");
-        var dbType = SessionBrowser.DetectDbType(dbPath);
+        var dbType = SessionUtils.DetectDbType(dbPath);
 
         if (dbType == SessionDbType.SkillValidator)
         {
@@ -914,7 +914,7 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                         try { fileSize = new FileInfo(eventsPath).Length; } catch { }
                     else
                         continue;
-                    (branch, repository) = SessionBrowser.EnrichCopilotSessionMetadata(yamlPath, eventsPath, branch, repository);
+                    (branch, repository) = SessionUtils.EnrichCopilotSessionMetadata(yamlPath, eventsPath, branch, repository);
                     results.Add(new BrowserSession(id, summary, cwd, updatedAt, eventsPath, fileSize, branch, repository));
                 }
             }
@@ -1020,7 +1020,7 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             command = "claude";
             args = $"--resume \"{sessionId}\"";
         }
-        else if (SessionBrowser.CanRunStatic("copilot"))
+        else if (SessionUtils.CanRun("copilot"))
         {
             command = "copilot";
             args = $"--resume \"{sessionId}\"";
