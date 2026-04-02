@@ -95,3 +95,9 @@
 - Database integration patterns proven: parameter injection + graceful degradation working correctly
 - Ready to unblock Tier 2 (Full-Text Search) after adoption feedback
 - Build clean (0 warnings), 84 tests passing, all CP tests green
+
+### 2026-04-02: XenoSessionBrowser DataGrid sort fix
+- `DataGridListDocument.AddRow()` appends rows in insertion order; the DataGrid displays them in that order regardless of any backing list sort.
+- `DataGridDocumentView.SetSortDescriptions` exists but only sorts by column string values — unsuitable for human-readable age strings like "2h", "3d".
+- Fix: on each UI frame where new batches arrive, clear the DataGrid (`RemoveRows`) and rebuild from the already-sorted `allSessions` list snapshot. This guarantees newest-first order across all loading paths (DB, filesystem, Claude, polling).
+- `DataGridListDocument` also exposes `InsertRow(int index, T row)` for positional insertion if needed in the future.

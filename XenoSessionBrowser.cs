@@ -312,11 +312,23 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                     return TerminalLoopResult.Stop;
 
                 // Apply any sessions queued by the background scan thread
-                while (pendingSessions.TryDequeue(out var batch))
+                bool hadNewSessions = false;
+                while (pendingSessions.TryDequeue(out _))
+                    hadNewSessions = true;
+
+                if (hadNewSessions)
                 {
+                    // Rebuild the DataGrid from the already-sorted allSessions list
+                    // so rows always appear newest-first.
+                    List<BrowserSession> snapshot;
+                    lock (sessionsLock)
+                        snapshot = [.. allSessions];
+
                     using (doc.BeginUpdate())
                     {
-                        foreach (var s in batch)
+                        if (doc.Rows.Count > 0)
+                            doc.RemoveRows(0, doc.Rows.Count);
+                        foreach (var s in snapshot)
                             doc.AddRow(MakeRow(s));
                     }
                     sessionCount.Value = doc.Rows.Count;
