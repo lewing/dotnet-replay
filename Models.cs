@@ -48,6 +48,8 @@ class EvalData
     public string? CurrentCase { get; set; }
 }
 
+record CheckpointRow(string Title, int CheckpointNumber, string? Overview, string? WorkDone, string? NextSteps, string? CreatedAt);
+
 enum PagerAction { Quit, Browse, Resume }
 
 enum SessionDbType { CopilotCli, SkillValidator, Unknown }

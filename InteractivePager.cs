@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using Spectre.Console;
 using static TextUtils;
 using static EvalProcessor;
@@ -276,6 +277,146 @@ class InteractivePager(ContentRenderer cr, bool noColor, string? filePath, strin
             }
 
             Console.CursorVisible = true;
+        }
+
+        void ShowCheckpoints()
+        {
+            var (dbPath, sessionId) = DataParsers.ResolveSessionDbContext(filePath);
+            if (dbPath is null || sessionId is null) return;
+
+            List<CheckpointRow> checkpoints;
+            try
+            {
+                using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+                conn.Open();
+                checkpoints = DataParsers.LoadCheckpointsForSession(conn, sessionId);
+            }
+            catch { return; }
+
+            if (checkpoints.Count == 0) return;
+
+            // Simple keyboard-driven checkpoint picker overlay
+            int cpIdx = 0;
+            bool inDetail = false;
+            int detailScroll = 0;
+
+            void RenderCheckpointOverlay()
+            {
+                int w = AnsiConsole.Profile.Width;
+                int h = AnsiConsole.Profile.Height;
+                AnsiConsole.Clear();
+                AnsiConsole.Cursor.SetPosition(0, 1);
+
+                if (inDetail)
+                {
+                    var cp = checkpoints[cpIdx];
+                    var lines = new List<string>
+                    {
+                        $"  Checkpoint {cp.CheckpointNumber}: {cp.Title}",
+                        ""
+                    };
+                    if (cp.CreatedAt is not null)
+                        lines.Add($"  Created: {cp.CreatedAt}");
+                    lines.Add("");
+                    if (cp.Overview is not null)
+                    {
+                        lines.Add("  ── Overview ──");
+                        foreach (var l in cp.Overview.Split('\n')) lines.Add($"  {l}");
+                        lines.Add("");
+                    }
+                    if (cp.WorkDone is not null)
+                    {
+                        lines.Add("  ── Work Done ──");
+                        foreach (var l in cp.WorkDone.Split('\n')) lines.Add($"  {l}");
+                        lines.Add("");
+                    }
+                    if (cp.NextSteps is not null)
+                    {
+                        lines.Add("  ── Next Steps ──");
+                        foreach (var l in cp.NextSteps.Split('\n')) lines.Add($"  {l}");
+                        lines.Add("");
+                    }
+
+                    int viewH = h - 2;
+                    detailScroll = Math.Clamp(detailScroll, 0, Math.Max(0, lines.Count - viewH));
+                    for (int i = detailScroll; i < lines.Count && i < detailScroll + viewH; i++)
+                    {
+                        var text = lines[i].Length > w ? lines[i][..w] : lines[i];
+                        Console.WriteLine(text + new string(' ', Math.Max(0, w - text.Length)));
+                    }
+                    Console.Write($"[Esc] back  [j/k] scroll");
+                }
+                else
+                {
+                    Console.WriteLine($"  Checkpoints ({checkpoints.Count}):");
+                    Console.WriteLine();
+                    int viewH = h - 4;
+                    int scrollOff = Math.Max(0, cpIdx - viewH + 1);
+                    for (int i = scrollOff; i < checkpoints.Count && i < scrollOff + viewH; i++)
+                    {
+                        var cp = checkpoints[i];
+                        var marker = i == cpIdx ? " >" : "  ";
+                        var text = $"{marker} #{cp.CheckpointNumber}: {cp.Title}";
+                        if (text.Length > w) text = text[..w];
+                        Console.WriteLine(text + new string(' ', Math.Max(0, w - text.Length)));
+                    }
+                    Console.Write($"[Enter] view  [j/k] navigate  [Esc/c] close");
+                }
+            }
+
+            Console.CursorVisible = false;
+            RenderCheckpointOverlay();
+
+            while (true)
+            {
+                var key = Console.ReadKey(true);
+                if (!inDetail)
+                {
+                    switch (key.Key)
+                    {
+                        case ConsoleKey.Escape:
+                        case ConsoleKey.C:
+                            return;
+                        case ConsoleKey.J:
+                        case ConsoleKey.DownArrow:
+                            cpIdx = Math.Min(cpIdx + 1, checkpoints.Count - 1);
+                            RenderCheckpointOverlay();
+                            break;
+                        case ConsoleKey.K:
+                        case ConsoleKey.UpArrow:
+                            cpIdx = Math.Max(cpIdx - 1, 0);
+                            RenderCheckpointOverlay();
+                            break;
+                        case ConsoleKey.Enter:
+                            inDetail = true;
+                            detailScroll = 0;
+                            RenderCheckpointOverlay();
+                            break;
+                    }
+                }
+                else
+                {
+                    switch (key.Key)
+                    {
+                        case ConsoleKey.Escape:
+                            inDetail = false;
+                            RenderCheckpointOverlay();
+                            break;
+                        case ConsoleKey.J:
+                        case ConsoleKey.DownArrow:
+                            detailScroll++;
+                            RenderCheckpointOverlay();
+                            break;
+                        case ConsoleKey.K:
+                        case ConsoleKey.UpArrow:
+                            detailScroll = Math.Max(0, detailScroll - 1);
+                            RenderCheckpointOverlay();
+                            break;
+                        case ConsoleKey.C:
+                            return;
+                    }
+                }
+            }
         }
 
         // Handle Ctrl+C gracefully
@@ -611,6 +752,10 @@ class InteractivePager(ContentRenderer cr, bool noColor, string? filePath, strin
                                 break;
                             case 'b':
                                 return PagerAction.Browse;
+                            case 'c':
+                                ShowCheckpoints();
+                                Render();
+                                break;
                             case 'r':
                                 return PagerAction.Resume;
                         }

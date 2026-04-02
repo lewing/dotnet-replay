@@ -1,10 +1,54 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Data.Sqlite;
 using static TextUtils;
 
 class DataParsers(int? tail)
 {
+    /// <summary>Load checkpoints for a session from the session-store DB. Returns empty list on any error.</summary>
+    public static List<CheckpointRow> LoadCheckpointsForSession(SqliteConnection connection, string sessionId)
+    {
+        var results = new List<CheckpointRow>();
+        try
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT title, checkpoint_number, overview, work_done, next_steps, created_at FROM checkpoints WHERE session_id = @sid ORDER BY checkpoint_number";
+            cmd.Parameters.AddWithValue("@sid", sessionId);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                results.Add(new CheckpointRow(
+                    Title: reader.IsDBNull(0) ? $"Checkpoint {reader.GetInt32(1)}" : reader.GetString(0),
+                    CheckpointNumber: reader.GetInt32(1),
+                    Overview: reader.IsDBNull(2) ? null : reader.GetString(2),
+                    WorkDone: reader.IsDBNull(3) ? null : reader.GetString(3),
+                    NextSteps: reader.IsDBNull(4) ? null : reader.GetString(4),
+                    CreatedAt: reader.IsDBNull(5) ? null : reader.GetString(5)));
+            }
+        }
+        catch { /* table doesn't exist or query error — return empty */ }
+        return results;
+    }
+
+    /// <summary>Resolve the session-store DB path and session ID from an events.jsonl file path.</summary>
+    public static (string? dbPath, string? sessionId) ResolveSessionDbContext(string? eventsPath)
+    {
+        if (eventsPath is null) return (null, null);
+        // Expected layout: ~/.copilot/session-state/{session-id}/events.jsonl
+        // DB lives at: ~/.copilot/session-store/sessions.db
+        var sessionDir = Path.GetDirectoryName(eventsPath);
+        if (sessionDir is null) return (null, null);
+        var sessionId = Path.GetFileName(sessionDir);
+        var sessionStateDir = Path.GetDirectoryName(sessionDir);
+        if (sessionStateDir is null) return (null, null);
+        var copilotDir = Path.GetDirectoryName(sessionStateDir);
+        if (copilotDir is null) return (null, null);
+        var dbPath = Path.Combine(copilotDir, "session-store", "sessions.db");
+        if (!File.Exists(dbPath)) return (null, null);
+        return (dbPath, sessionId);
+    }
+
     static readonly JsonSerializerOptions s_syntheticOptions = new()
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using XenoAtom.Terminal;
 using XenoAtom.Terminal.UI;
 using XenoAtom.Terminal.UI.Commands;
@@ -159,6 +160,77 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
             .Bottom(new CommandBar())
             .Content(content);
 
+        // === Checkpoint state ===
+        List<CheckpointRow>? loadedCheckpoints = null;
+        bool showCheckpointList = false;
+        bool showCheckpointDetail = false;
+        int checkpointIdx = 0;
+
+        List<CheckpointRow> GetCheckpoints()
+        {
+            if (loadedCheckpoints is not null) return loadedCheckpoints;
+            var (dbp, sid) = DataParsers.ResolveSessionDbContext(filePath);
+            if (dbp is null || sid is null) { loadedCheckpoints = []; return loadedCheckpoints; }
+            try
+            {
+                using var conn = new SqliteConnection($"Data Source={dbp};Mode=ReadOnly");
+                conn.Open();
+                loadedCheckpoints = DataParsers.LoadCheckpointsForSession(conn, sid);
+            }
+            catch { loadedCheckpoints = []; }
+            return loadedCheckpoints;
+        }
+
+        void PopulateCheckpointList()
+        {
+            var cps = GetCheckpoints();
+            if (cps.Count == 0) return;
+            log.Clear();
+            log.AppendLine($"  Checkpoints ({cps.Count}):");
+            log.AppendLine("");
+            for (int i = 0; i < cps.Count; i++)
+            {
+                var marker = i == checkpointIdx ? " >" : "  ";
+                log.AppendLine($"{marker} #{cps[i].CheckpointNumber}: {cps[i].Title}");
+            }
+            log.AppendLine("");
+            log.AppendLine("  [Enter] view  [j/k] navigate  [Esc/c] close");
+            SetVerticalOffset(0);
+        }
+
+        void PopulateCheckpointDetail()
+        {
+            var cps = GetCheckpoints();
+            if (checkpointIdx >= cps.Count) return;
+            var cp = cps[checkpointIdx];
+            log.Clear();
+            log.AppendLine($"  Checkpoint {cp.CheckpointNumber}: {cp.Title}");
+            log.AppendLine("");
+            if (cp.CreatedAt is not null)
+                log.AppendLine($"  Created: {cp.CreatedAt}");
+            log.AppendLine("");
+            if (cp.Overview is not null)
+            {
+                log.AppendLine("  ── Overview ──");
+                foreach (var l in cp.Overview.Split('\n')) log.AppendLine($"  {l}");
+                log.AppendLine("");
+            }
+            if (cp.WorkDone is not null)
+            {
+                log.AppendLine("  ── Work Done ──");
+                foreach (var l in cp.WorkDone.Split('\n')) log.AppendLine($"  {l}");
+                log.AppendLine("");
+            }
+            if (cp.NextSteps is not null)
+            {
+                log.AppendLine("  ── Next Steps ──");
+                foreach (var l in cp.NextSteps.Split('\n')) log.AppendLine($"  {l}");
+                log.AppendLine("");
+            }
+            log.AppendLine("  [Esc] back to list  [j/k] scroll");
+            SetVerticalOffset(0);
+        }
+
         // === Commands ===
         log.AddCommand(new Command
         {
@@ -183,6 +255,19 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
             Presentation = CommandPresentation.None,
             Execute = _ =>
             {
+                if (showCheckpointDetail)
+                {
+                    showCheckpointDetail = false;
+                    showCheckpointList = true;
+                    PopulateCheckpointList();
+                    return;
+                }
+                if (showCheckpointList)
+                {
+                    showCheckpointList = false;
+                    needsRepopulate = true;
+                    return;
+                }
                 result = PagerAction.Quit;
                 exitRequested = true;
             }
@@ -318,7 +403,17 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
             Gesture = new KeyGesture('j'),
             Importance = CommandImportance.Secondary,
             Presentation = CommandPresentation.None,
-            Execute = _ => ScrollByLines(1)
+            Execute = _ =>
+            {
+                if (showCheckpointList)
+                {
+                    var cps = GetCheckpoints();
+                    checkpointIdx = Math.Min(checkpointIdx + 1, cps.Count - 1);
+                    PopulateCheckpointList();
+                }
+                else
+                    ScrollByLines(1);
+            }
         });
 
         log.AddCommand(new Command
@@ -328,7 +423,16 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
             Gesture = new KeyGesture('k'),
             Importance = CommandImportance.Secondary,
             Presentation = CommandPresentation.None,
-            Execute = _ => ScrollByLines(-1)
+            Execute = _ =>
+            {
+                if (showCheckpointList)
+                {
+                    checkpointIdx = Math.Max(checkpointIdx - 1, 0);
+                    PopulateCheckpointList();
+                }
+                else
+                    ScrollByLines(-1);
+            }
         });
 
         log.AddCommand(new Command
@@ -406,6 +510,56 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
             {
                 if (log.MatchCount > 0)
                     log.GoToPreviousMatch();
+            }
+        });
+
+        log.AddCommand(new Command
+        {
+            Id = "Pager.Checkpoints",
+            LabelMarkup = "Checkpoints",
+            Gesture = new KeyGesture('c'),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.CommandBar,
+            Execute = _ =>
+            {
+                if (showCheckpointList || showCheckpointDetail)
+                {
+                    // Close checkpoint view, restore content
+                    showCheckpointList = false;
+                    showCheckpointDetail = false;
+                    showInfoOverlay = false;
+                    log.IsVisible = true;
+                    infoPanel.IsVisible = false;
+                    needsRepopulate = true;
+                    return;
+                }
+                var cps = GetCheckpoints();
+                if (cps.Count == 0) return;
+                showCheckpointList = true;
+                showCheckpointDetail = false;
+                showInfoOverlay = false;
+                checkpointIdx = 0;
+                log.IsVisible = true;
+                infoPanel.IsVisible = false;
+                PopulateCheckpointList();
+            }
+        });
+
+        log.AddCommand(new Command
+        {
+            Id = "Pager.CheckpointEnter",
+            LabelMarkup = "Select",
+            Gesture = new KeyGesture(TerminalKey.Enter),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.None,
+            Execute = _ =>
+            {
+                if (showCheckpointList)
+                {
+                    showCheckpointList = false;
+                    showCheckpointDetail = true;
+                    PopulateCheckpointDetail();
+                }
             }
         });
 
