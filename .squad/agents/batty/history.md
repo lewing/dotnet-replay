@@ -101,3 +101,13 @@
 - `DataGridDocumentView.SetSortDescriptions` exists but only sorts by column string values — unsuitable for human-readable age strings like "2h", "3d".
 - Fix: on each UI frame where new batches arrive, clear the DataGrid (`RemoveRows`) and rebuild from the already-sorted `allSessions` list snapshot. This guarantees newest-first order across all loading paths (DB, filesystem, Claude, polling).
 - `DataGridListDocument` also exposes `InsertRow(int index, T row)` for positional insertion if needed in the future.
+
+### 2026-04-02: Tier 2 — Full-Text Search Across Sessions
+- Added `SearchResult` record to `Models.cs` and `SearchSessions` static method to `DataParsers.cs` using FTS5 `snippet()` with `»`/`«` highlight markers and `MATCH @query ORDER BY rank` for relevance sorting.
+- `SearchSessions` follows the same graceful degradation pattern as `LoadCheckpointsForSession`: empty query → empty list, missing table → caught exception → empty list, nullable `SourceId` handled.
+- XenoSessionBrowser (`S` key): TextBox-based search input panel, results populate the DataGrid replacing session rows, Escape restores session list. Commands registered on `searchInput` for Enter/Escape to handle submit/cancel while TextBox has implicit keyboard focus.
+- SessionBrowser/Spectre (`s` key): Uses `AnsiConsole.Ask<string>()` for query input, shows results in a vim-navigable overlay (j/k/Enter/Esc), selecting a result returns its `EventsPath` to the pager loop.
+- InteractivePager (`s` key): FTS search overlay using `ResolveSessionDbContext` to derive DB path from the current events.jsonl, read-only result display.
+- XenoPager (`s` key): Reuses LogControl's built-in search bar for query text capture — first `s` opens search bar, user types query, second `s` executes FTS search. Results shown in log with j/k navigation.
+- DB path resolution: tries `session-store.db` first, then `session-store/sessions.db` as fallback. Both browsers and pagers share the same pattern.
+- 20 unit tests in `SearchTests.cs` covering: happy path, highlight markers, empty/whitespace/null queries, missing table, empty table, limit, cross-session matches, source types, nullable SourceId, prefix/phrase/boolean/malformed queries.

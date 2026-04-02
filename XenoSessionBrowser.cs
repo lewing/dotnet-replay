@@ -141,12 +141,146 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
 
         int lastSelectedRow = -1;
 
+        // === Cross-session FTS5 search state ===
+        bool inFtsSearch = false;
+        bool showingSearchResults = false;
+        List<SearchResult> searchResults = [];
+        // Map visual row index → SearchResult for result navigation
+        Dictionary<int, SearchResult> searchResultMap = [];
+
+        // Resolve the session-store DB path for FTS5 search
+        string? ResolveSearchDbPath()
+        {
+            if (dbPathOverride is not null) return dbPathOverride;
+            if (sessionStateDir is null) return null;
+            var parent = Path.GetDirectoryName(sessionStateDir);
+            if (parent is null) return null;
+            // Try session-store.db first (browser DB), then session-store/sessions.db (Copilot CLI store)
+            var db1 = Path.Combine(parent, "session-store.db");
+            if (File.Exists(db1)) return db1;
+            var db2 = Path.Combine(parent, "session-store", "sessions.db");
+            if (File.Exists(db2)) return db2;
+            return null;
+        }
+
+        void RunFtsSearch(string query)
+        {
+            var searchDbPath = ResolveSearchDbPath();
+            if (searchDbPath is null) return;
+            try
+            {
+                using var conn = new SqliteConnection($"Data Source={searchDbPath};Mode=ReadOnly");
+                conn.Open();
+                searchResults = DataParsers.SearchSessions(conn, query);
+            }
+            catch { searchResults = []; }
+        }
+
+        void ShowSearchResults()
+        {
+            showingSearchResults = true;
+            searchResultMap.Clear();
+            using (doc.BeginUpdate())
+            {
+                if (doc.Rows.Count > 0)
+                    doc.RemoveRows(0, doc.Rows.Count);
+                if (searchResults.Count == 0)
+                {
+                    doc.AddRow(new SessionRow
+                    {
+                        Icon = "🔍",
+                        Age = "",
+                        Size = "",
+                        Summary = "(no results)",
+                        Branch = "",
+                        EventsPath = "",
+                        SessionId = ""
+                    });
+                }
+                else
+                {
+                    // Look up session summaries for enriched display
+                    Dictionary<string, BrowserSession> sessionMap;
+                    lock (sessionsLock)
+                        sessionMap = allSessions.ToDictionary(s => s.Id, s => s);
+
+                    for (int i = 0; i < searchResults.Count; i++)
+                    {
+                        var sr = searchResults[i];
+                        var snippet = sr.Snippet.Replace('\n', ' ').Replace('\r', ' ');
+                        if (snippet.Length > 120) snippet = snippet[..117] + "...";
+                        var sourceLabel = sr.SourceType switch
+                        {
+                            "turn" => "💬",
+                            "checkpoint_overview" => "📍",
+                            "checkpoint_work_done" => "📍",
+                            "checkpoint_next_steps" => "📍",
+                            _ => "📄"
+                        };
+                        var eventsPath = "";
+                        var sessionSummary = sr.SessionId[..Math.Min(8, sr.SessionId.Length)];
+                        if (sessionMap.TryGetValue(sr.SessionId, out var bs))
+                        {
+                            eventsPath = bs.EventsPath;
+                            if (!string.IsNullOrEmpty(bs.Summary))
+                                sessionSummary = bs.Summary.Length > 30
+                                    ? bs.Summary[..27] + "..."
+                                    : bs.Summary;
+                        }
+                        var row = new SessionRow
+                        {
+                            Icon = sourceLabel,
+                            Age = sr.SourceType,
+                            Size = "",
+                            Summary = snippet,
+                            Branch = sessionSummary,
+                            EventsPath = eventsPath,
+                            SessionId = sr.SessionId
+                        };
+                        doc.AddRow(row);
+                        searchResultMap[i] = sr;
+                    }
+                }
+            }
+        }
+
+        void ExitSearchMode()
+        {
+            inFtsSearch = false;
+            if (!showingSearchResults) return;
+            showingSearchResults = false;
+            searchResults.Clear();
+            searchResultMap.Clear();
+            // Rebuild the DataGrid from allSessions
+            List<BrowserSession> snapshot;
+            lock (sessionsLock)
+                snapshot = [.. allSessions];
+            using (doc.BeginUpdate())
+            {
+                if (doc.Rows.Count > 0)
+                    doc.RemoveRows(0, doc.Rows.Count);
+                foreach (var s in snapshot)
+                    doc.AddRow(MakeRow(s));
+            }
+            sessionCount.Value = snapshot.Count;
+        }
+
         // Layout
+        var searchInput = new TextBox("")
+            .HorizontalAlignment(Align.Stretch);
+        var searchPanel = new HStack(
+                new TextBlock("🔍 Search: "),
+                searchInput)
+            .HorizontalAlignment(Align.Stretch);
+        searchPanel.IsVisible = false;
+
         var header = new Header()
             .Left(new TextBlock(() =>
             {
                 var label = isSkillDb ? "🧪 Skill Eval" : "📋 Sessions";
                 var loading = scanComplete ? "" : " Loading...";
+                if (showingSearchResults)
+                    return $"🔍 Search Results — {searchResults.Count} matches";
                 return $"{label} — {sessionCount.Value} sessions{loading}";
             }));
 
@@ -181,10 +315,14 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             }
         }
 
+        var mainContent = new VStack(searchPanel, content)
+            .HorizontalAlignment(Align.Stretch)
+            .VerticalAlignment(Align.Stretch);
+
         var root = new DockLayout()
             .Top(header)
             .Bottom(new CommandBar())
-            .Content(content);
+            .Content(mainContent);
 
         var toastHost = new ToastHost();
         toastHost.Content(root);
@@ -211,6 +349,19 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
         // Commands — registered on grid (checked first in parent walk from focused element)
         Action openAction = () =>
         {
+            if (inFtsSearch)
+            {
+                // Submit search query
+                var query = searchInput.Text?.Trim() ?? "";
+                inFtsSearch = false;
+                searchPanel.IsVisible = false;
+                if (query.Length > 0)
+                {
+                    RunFtsSearch(query);
+                    ShowSearchResults();
+                }
+                return;
+            }
             var row = GetSelectedRow();
             if (row?.EventsPath is not null && File.Exists(row.EventsPath))
             {
@@ -218,7 +369,21 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                 exitRequested = true;
             }
         };
-        Action quitAction = () => exitRequested = true;
+        Action quitAction = () =>
+        {
+            if (inFtsSearch)
+            {
+                inFtsSearch = false;
+                searchPanel.IsVisible = false;
+                return;
+            }
+            if (showingSearchResults)
+            {
+                ExitSearchMode();
+                return;
+            }
+            exitRequested = true;
+        };
 
         grid.AddCommand(new Command
         {
@@ -292,6 +457,47 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                     exitRequested = true;
                 }
             }
+        });
+
+        toastHost.AddCommand(new Command
+        {
+            Id = "Browser.FtsSearch",
+            LabelMarkup = "Search All",
+            Gesture = new KeyGesture('s'),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.CommandBar,
+            Execute = _ =>
+            {
+                if (inFtsSearch) return;
+                if (showingSearchResults)
+                {
+                    ExitSearchMode();
+                    return;
+                }
+                inFtsSearch = true;
+                searchInput.Text = "";
+                searchPanel.IsVisible = true;
+            }
+        });
+
+        // Register Enter/Escape on the search TextBox so it submits or cancels
+        searchInput.AddCommand(new Command
+        {
+            Id = "SearchInput.Submit",
+            LabelMarkup = "Submit",
+            Gesture = new KeyGesture(TerminalKey.Enter),
+            Importance = CommandImportance.Primary,
+            Presentation = CommandPresentation.None,
+            Execute = _ => openAction()
+        });
+        searchInput.AddCommand(new Command
+        {
+            Id = "SearchInput.Cancel",
+            LabelMarkup = "Cancel",
+            Gesture = new KeyGesture(TerminalKey.Escape),
+            Importance = CommandImportance.Primary,
+            Presentation = CommandPresentation.None,
+            Execute = _ => quitAction()
         });
 
         // Background session loading — queue results for UI thread to apply

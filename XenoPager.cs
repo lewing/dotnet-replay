@@ -166,6 +166,57 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
         bool showCheckpointDetail = false;
         int checkpointIdx = 0;
 
+        // === FTS search state ===
+        bool showFtsResults = false;
+        List<SearchResult> ftsResults = [];
+        int ftsIdx = 0;
+
+        List<SearchResult> RunFtsSearch(string query)
+        {
+            var (dbp, _) = DataParsers.ResolveSessionDbContext(filePath);
+            if (dbp is null) return [];
+            try
+            {
+                using var conn = new SqliteConnection($"Data Source={dbp};Mode=ReadOnly");
+                conn.Open();
+                return DataParsers.SearchSessions(conn, query);
+            }
+            catch { return []; }
+        }
+
+        void PopulateFtsResults()
+        {
+            log.Clear();
+            if (ftsResults.Count == 0)
+            {
+                log.AppendLine("  No results found.");
+                log.AppendLine("");
+                log.AppendLine("  [Esc/s] close");
+                SetVerticalOffset(0);
+                return;
+            }
+            log.AppendLine($"  🔍 Search Results ({ftsResults.Count}):");
+            log.AppendLine("");
+            for (int i = 0; i < ftsResults.Count; i++)
+            {
+                var sr = ftsResults[i];
+                var snippet = sr.Snippet.Replace('\n', ' ').Replace('\r', ' ');
+                if (snippet.Length > 100) snippet = snippet[..97] + "...";
+                var sourceLabel = sr.SourceType switch
+                {
+                    "turn" => "💬",
+                    "checkpoint_overview" or "checkpoint_work_done" or "checkpoint_next_steps" => "📍",
+                    _ => "📄"
+                };
+                var marker = i == ftsIdx ? " >" : "  ";
+                var sid = sr.SessionId[..Math.Min(8, sr.SessionId.Length)];
+                log.AppendLine($"{marker} {sourceLabel} [{sid}] {snippet}");
+            }
+            log.AppendLine("");
+            log.AppendLine("  [j/k] navigate  [Esc/s] close");
+            SetVerticalOffset(0);
+        }
+
         List<CheckpointRow> GetCheckpoints()
         {
             if (loadedCheckpoints is not null) return loadedCheckpoints;
@@ -265,6 +316,12 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
                 if (showCheckpointList)
                 {
                     showCheckpointList = false;
+                    needsRepopulate = true;
+                    return;
+                }
+                if (showFtsResults)
+                {
+                    showFtsResults = false;
                     needsRepopulate = true;
                     return;
                 }
@@ -411,6 +468,11 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
                     checkpointIdx = Math.Min(checkpointIdx + 1, cps.Count - 1);
                     PopulateCheckpointList();
                 }
+                else if (showFtsResults)
+                {
+                    ftsIdx = Math.Min(ftsIdx + 1, ftsResults.Count - 1);
+                    PopulateFtsResults();
+                }
                 else
                     ScrollByLines(1);
             }
@@ -429,6 +491,11 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
                 {
                     checkpointIdx = Math.Max(checkpointIdx - 1, 0);
                     PopulateCheckpointList();
+                }
+                else if (showFtsResults)
+                {
+                    ftsIdx = Math.Max(ftsIdx - 1, 0);
+                    PopulateFtsResults();
                 }
                 else
                     ScrollByLines(-1);
@@ -560,6 +627,40 @@ class XenoPager(ContentRenderer cr, string? filePath, string? filterType, bool e
                     showCheckpointDetail = true;
                     PopulateCheckpointDetail();
                 }
+            }
+        });
+
+        log.AddCommand(new Command
+        {
+            Id = "Pager.FtsSearch",
+            LabelMarkup = "Search All",
+            Gesture = new KeyGesture('s'),
+            Importance = CommandImportance.Secondary,
+            Presentation = CommandPresentation.CommandBar,
+            Execute = _ =>
+            {
+                if (showFtsResults)
+                {
+                    showFtsResults = false;
+                    needsRepopulate = true;
+                    return;
+                }
+                if (showCheckpointList || showCheckpointDetail) return;
+                // Use the current log search text as the FTS query if available
+                var query = log.SearchText?.Trim();
+                if (string.IsNullOrEmpty(query))
+                {
+                    // Open the search bar so the user can type a query, then press 's' again
+                    log.OpenSearch();
+                    return;
+                }
+                ftsResults = RunFtsSearch(query);
+                ftsIdx = 0;
+                showFtsResults = true;
+                showInfoOverlay = false;
+                log.IsVisible = true;
+                infoPanel.IsVisible = false;
+                PopulateFtsResults();
             }
         });
 

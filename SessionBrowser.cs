@@ -1028,10 +1028,158 @@ class SessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? sessio
                                 return null;
                             }
                             break;
+                        case 's':
+                        {
+                            var ftsResult = ShowFtsSearch(dbPathOverride, allSessions, sessionsLock);
+                            if (ftsResult is not null) return ftsResult;
+                            AnsiConsole.Clear();
+                            Render();
+                            break;
+                        }
                     }
                     break;
             }
         }
+    }
+
+    /// <summary>Full-text search across sessions using FTS5 search_index.</summary>
+    string? ShowFtsSearch(string? dbPathOverride, List<BrowserSession> allSessions, System.Threading.Lock sessionsLock)
+    {
+        var searchDbPath = ResolveSearchDbPath(dbPathOverride);
+        if (searchDbPath is null) return null;
+
+        Console.CursorVisible = true;
+        AnsiConsole.Clear();
+        var query = AnsiConsole.Ask<string>("🔍 [bold]Search all sessions:[/]");
+        Console.CursorVisible = false;
+        if (string.IsNullOrWhiteSpace(query)) return null;
+
+        List<SearchResult> results;
+        try
+        {
+            using var conn = new SqliteConnection($"Data Source={searchDbPath};Mode=ReadOnly");
+            conn.Open();
+            results = DataParsers.SearchSessions(conn, query);
+        }
+        catch { results = []; }
+
+        if (results.Count == 0)
+        {
+            AnsiConsole.Clear();
+            AnsiConsole.MarkupLine("[dim]No results found. Press any key to continue.[/]");
+            Console.ReadKey(true);
+            return null;
+        }
+
+        // Build session lookup for enriched display
+        Dictionary<string, BrowserSession> sessionMap;
+        lock (sessionsLock)
+            sessionMap = allSessions.ToDictionary(s => s.Id, s => s);
+
+        // Show results in a selection list
+        int cursor = 0;
+        int scroll = 0;
+
+        void RenderResults()
+        {
+            int w = AnsiConsole.Profile.Width;
+            int h = AnsiConsole.Profile.Height;
+            Console.SetCursorPosition(0, 0);
+            AnsiConsole.MarkupLine($"[bold]🔍 Search Results[/] — {results.Count} matches for [cyan]{Markup.Escape(query)}[/]");
+            AnsiConsole.MarkupLine("[dim]j/k navigate  Enter select  Esc back[/]");
+            Console.WriteLine();
+
+            int viewH = h - 5;
+            if (cursor < scroll) scroll = cursor;
+            if (cursor >= scroll + viewH) scroll = cursor - viewH + 1;
+
+            for (int i = scroll; i < results.Count && i < scroll + viewH; i++)
+            {
+                var sr = results[i];
+                var snippet = sr.Snippet.Replace('\n', ' ').Replace('\r', ' ');
+                var sourceLabel = sr.SourceType switch
+                {
+                    "turn" => "💬",
+                    "checkpoint_overview" or "checkpoint_work_done" or "checkpoint_next_steps" => "📍",
+                    _ => "📄"
+                };
+                var sessionLabel = sr.SessionId[..Math.Min(8, sr.SessionId.Length)];
+                if (sessionMap.TryGetValue(sr.SessionId, out var bs) && !string.IsNullOrEmpty(bs.Summary))
+                    sessionLabel = bs.Summary.Length > 25 ? bs.Summary[..22] + "..." : bs.Summary;
+
+                var marker = i == cursor ? "[bold]>[/] " : "  ";
+                var line = $"{marker}{sourceLabel} [dim]{Markup.Escape(sessionLabel)}[/]: {Markup.Escape(snippet)}";
+                if (line.Length > w + 30) line = line[..(w + 27)] + "...";
+                AnsiConsole.MarkupLine(line);
+            }
+            // Clear remaining lines
+            for (int i = Math.Min(results.Count, scroll + viewH); i < scroll + viewH; i++)
+                Console.WriteLine(new string(' ', w));
+        }
+
+        Console.CursorVisible = false;
+        AnsiConsole.Clear();
+        RenderResults();
+
+        while (true)
+        {
+            var key = Console.ReadKey(true);
+            switch (key.Key)
+            {
+                case ConsoleKey.Escape:
+                    return null;
+                case ConsoleKey.UpArrow:
+                    cursor = Math.Max(0, cursor - 1);
+                    RenderResults();
+                    break;
+                case ConsoleKey.DownArrow:
+                    cursor = Math.Min(results.Count - 1, cursor + 1);
+                    RenderResults();
+                    break;
+                case ConsoleKey.Enter:
+                    if (cursor >= 0 && cursor < results.Count)
+                    {
+                        var selected = results[cursor];
+                        if (sessionMap.TryGetValue(selected.SessionId, out var selectedSession)
+                            && !string.IsNullOrEmpty(selectedSession.EventsPath)
+                            && File.Exists(selectedSession.EventsPath))
+                        {
+                            Console.CursorVisible = true;
+                            AnsiConsole.Clear();
+                            return selectedSession.EventsPath;
+                        }
+                    }
+                    break;
+                default:
+                    switch (key.KeyChar)
+                    {
+                        case 'j':
+                            cursor = Math.Min(results.Count - 1, cursor + 1);
+                            RenderResults();
+                            break;
+                        case 'k':
+                            cursor = Math.Max(0, cursor - 1);
+                            RenderResults();
+                            break;
+                        case 'q':
+                            return null;
+                    }
+                    break;
+            }
+        }
+    }
+
+    string? ResolveSearchDbPath(string? dbPathOverride)
+    {
+        if (dbPathOverride is not null) return dbPathOverride;
+        if (sessionStateDir is null) return null;
+        var parent = Path.GetDirectoryName(sessionStateDir);
+        if (parent is null) return null;
+        var db1 = Path.Combine(parent, "session-store.db");
+        if (File.Exists(db1)) return db1;
+        var db2 = Path.Combine(parent, "session-store", "sessions.db");
+        if (File.Exists(db2)) return db2;
+        return null;
     }
 
     public void LaunchResume(string path)

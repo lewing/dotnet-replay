@@ -50,6 +50,8 @@ class EvalData
 
 record CheckpointRow(string Title, int CheckpointNumber, string? Overview, string? WorkDone, string? NextSteps, string? CreatedAt);
 
+record SearchResult(string SessionId, string Snippet, string SourceType, string? SourceId, double Rank);
+
 enum PagerAction { Quit, Browse, Resume }
 
 enum SessionDbType { CopilotCli, SkillValidator, Unknown }

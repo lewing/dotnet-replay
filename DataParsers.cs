@@ -31,6 +31,32 @@ class DataParsers(int? tail)
         return results;
     }
 
+    /// <summary>Search the FTS5 search_index table across all sessions. Returns empty list on any error.</summary>
+    public static List<SearchResult> SearchSessions(SqliteConnection connection, string query, int limit = 50)
+    {
+        var results = new List<SearchResult>();
+        if (string.IsNullOrWhiteSpace(query)) return results;
+        try
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT session_id, snippet(search_index, 0, '»', '«', '...', 32), source_type, source_id, rank FROM search_index WHERE search_index MATCH @query ORDER BY rank LIMIT @limit";
+            cmd.Parameters.AddWithValue("@query", query);
+            cmd.Parameters.AddWithValue("@limit", limit);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                results.Add(new SearchResult(
+                    SessionId: reader.GetString(0),
+                    Snippet: reader.GetString(1),
+                    SourceType: reader.GetString(2),
+                    SourceId: reader.IsDBNull(3) ? null : reader.GetString(3),
+                    Rank: reader.GetDouble(4)));
+            }
+        }
+        catch { /* table doesn't exist or query error — return empty */ }
+        return results;
+    }
+
     /// <summary>Resolve the session-store DB path and session ID from an events.jsonl file path.</summary>
     public static (string? dbPath, string? sessionId) ResolveSessionDbContext(string? eventsPath)
     {

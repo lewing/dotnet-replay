@@ -279,6 +279,95 @@ class InteractivePager(ContentRenderer cr, bool noColor, string? filePath, strin
             Console.CursorVisible = true;
         }
 
+        void ShowFtsSearchOverlay()
+        {
+            var (dbPath, _) = DataParsers.ResolveSessionDbContext(filePath);
+            if (dbPath is null) return;
+
+            Console.CursorVisible = true;
+            AnsiConsole.Clear();
+            string query;
+            try { query = AnsiConsole.Ask<string>("🔍 [bold]Search all sessions:[/]"); }
+            catch { return; }
+            Console.CursorVisible = false;
+            if (string.IsNullOrWhiteSpace(query)) return;
+
+            List<SearchResult> results;
+            try
+            {
+                using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+                conn.Open();
+                results = DataParsers.SearchSessions(conn, query);
+            }
+            catch { results = []; }
+
+            if (results.Count == 0)
+            {
+                AnsiConsole.Clear();
+                AnsiConsole.MarkupLine("[dim]No results found. Press any key to continue.[/]");
+                Console.ReadKey(true);
+                return;
+            }
+
+            // Show results in a scrollable overlay
+            int idx = 0, scroll = 0;
+
+            void RenderSearchOverlay()
+            {
+                int w = AnsiConsole.Profile.Width;
+                int h = AnsiConsole.Profile.Height;
+                Console.SetCursorPosition(0, 0);
+                AnsiConsole.MarkupLine($"[bold]🔍 Search Results[/] — {results.Count} matches");
+                AnsiConsole.MarkupLine("[dim]j/k navigate  Esc close[/]");
+                Console.WriteLine();
+                int viewH = h - 5;
+                if (idx < scroll) scroll = idx;
+                if (idx >= scroll + viewH) scroll = idx - viewH + 1;
+                for (int i = scroll; i < results.Count && i < scroll + viewH; i++)
+                {
+                    var sr = results[i];
+                    var snippet = sr.Snippet.Replace('\n', ' ').Replace('\r', ' ');
+                    if (snippet.Length > w - 15) snippet = snippet[..(w - 18)] + "...";
+                    var sourceLabel = sr.SourceType switch
+                    {
+                        "turn" => "💬",
+                        "checkpoint_overview" or "checkpoint_work_done" or "checkpoint_next_steps" => "📍",
+                        _ => "📄"
+                    };
+                    var marker = i == idx ? "[bold]>[/] " : "  ";
+                    var sid = sr.SessionId[..Math.Min(8, sr.SessionId.Length)];
+                    AnsiConsole.MarkupLine($"{marker}{sourceLabel} [dim]{Markup.Escape(sid)}[/] {Markup.Escape(snippet)}");
+                }
+                for (int i = Math.Min(results.Count, scroll + viewH); i < scroll + viewH; i++)
+                    Console.WriteLine(new string(' ', w));
+            }
+
+            Console.CursorVisible = false;
+            AnsiConsole.Clear();
+            RenderSearchOverlay();
+            while (true)
+            {
+                var key = Console.ReadKey(true);
+                switch (key.Key)
+                {
+                    case ConsoleKey.Escape: return;
+                    case ConsoleKey.DownArrow:
+                        idx = Math.Min(results.Count - 1, idx + 1);
+                        RenderSearchOverlay();
+                        break;
+                    case ConsoleKey.UpArrow:
+                        idx = Math.Max(0, idx - 1);
+                        RenderSearchOverlay();
+                        break;
+                    default:
+                        if (key.KeyChar == 'j') { idx = Math.Min(results.Count - 1, idx + 1); RenderSearchOverlay(); }
+                        else if (key.KeyChar == 'k') { idx = Math.Max(0, idx - 1); RenderSearchOverlay(); }
+                        else if (key.KeyChar == 'q') return;
+                        break;
+                }
+            }
+        }
+
         void ShowCheckpoints()
         {
             var (dbPath, sessionId) = DataParsers.ResolveSessionDbContext(filePath);
@@ -754,6 +843,10 @@ class InteractivePager(ContentRenderer cr, bool noColor, string? filePath, strin
                                 return PagerAction.Browse;
                             case 'c':
                                 ShowCheckpoints();
+                                Render();
+                                break;
+                            case 's':
+                                ShowFtsSearchOverlay();
                                 Render();
                                 break;
                             case 'r':
