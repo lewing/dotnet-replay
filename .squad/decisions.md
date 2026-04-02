@@ -4,6 +4,137 @@
 
 <!-- Append decisions below. Format: ### {timestamp}: {topic} -->
 
+### 2026-04-02: Checkpoint Navigation Implementation Complete (Tier 1)
+
+**Author:** Batty, Rachael, Deckard  
+**Status:** Completed
+
+Tier 1 of the database feature roadmap (Checkpoint Navigation) is now complete and tested. Feature allows navigation to named checkpoints within a session via `c` keybinding in both Spectre and XenoAtom pagers.
+
+**Deliverables:**
+- `CheckpointRow` record in Models.cs
+- `LoadCheckpointsForSession` + `ResolveSessionDbContext` in DataParsers.cs
+- `c` keybinding + checkpoint UI in InteractivePager.cs and XenoPager.cs
+- 11 unit tests in CheckpointTests.cs (all passing)
+- Build clean, 84 tests passing
+
+**Unblocks:** Tier 2 (Full-Text Search) after adoption feedback
+
+---
+
+### 2026-03-16: In-Memory SQLite Testing Pattern for DB Tests
+
+**Author:** Rachael  
+**Status:** Completed
+
+Established testing pattern for database-related features: use in-memory SQLite connections and call production methods directly instead of replicating DB logic in tests.
+
+**Pattern:**
+- Test infrastructure: `SqliteConnection(":memory:")` for isolation and speed
+- API calls: Direct to `DataParsers` methods via InternalsVisibleTo
+- Advantage: Single source of truth; test failures catch real regressions
+
+**Applied in:** CheckpointTests.cs (11 tests covering happy path, edge cases, graceful degradation)
+
+---
+
+### 2026-03-16: 3-Tier Feature Roadmap: New Database Tables
+
+**Author:** Deckard (Lead)  
+**Status:** Approved
+
+**Tier 1 — Checkpoint Navigation** ✅ COMPLETED
+- Keybinding `c` → checkpoint list → detail view
+- Implementation: ~80 LOC; 1–2 days; LOW RISK
+- Value: ★★★★☆ | Effort: ★★☆☆☆
+
+**Tier 2 — Full-Text Search** (Planned)
+- CLI flag `--search <query>` + interactive results pane
+- Implementation: ~145 LOC; 1–2 weeks; MEDIUM RISK
+- Value: ★★★★★ | Effort: ★★★☆☆
+- Addresses issue #12 (grep across transcripts)
+
+**Tier 3 — Session Dependency Graph** (Deferred)
+- Files touched + GitHub refs per session
+- Timeline: 2–3 weeks after Tier 2
+- Precondition: Phase 2 (XenoSessionBrowser horizontal scroll) stable
+- Value: ★★★★☆ | Effort: ★★★★☆
+
+**Architecture:** Maintain parameter injection (DataParsers, ContentRenderer); graceful degradation if tables missing; comprehensive testing before each tier ships.
+
+---
+
+### 2026-03-16: PR #149 Review Fixes (dotnet/skills)
+
+**Author:** Batty  
+**Status:** Completed
+
+Resolved seven review comments from Copilot on `dotnet/skills` incremental-results branch:
+
+**Decisions:**
+1. Persist judge model in `sessions.db` via `schema_info["judge_model"]` when `validate --keep-sessions` creates DB
+2. Make `rejudge` require `--judge-model` flag for older DBs without persisted metadata
+3. Use fresh temporary directories for rejudge judge/pairwise sessions (not saved run WorkDir)
+4. Cache skill directory SHA once per evaluation; pass into each run instead of recomputing
+
+**Why:** `sessions.model` tracks agent model, not judge model. Persisted work dirs are ephemeral. Length-prefixed hashing prevents directory SHA collisions.
+
+---
+
+### 2026-03-16: XenoSessionBrowser Preview Pane Collapse
+
+**Author:** Batty  
+**Status:** Completed
+
+Fixed XenoAtom session browser preview pane collapse to restore session list to full width when preview is hidden.
+
+**Decisions:**
+1. Treat preview toggle as layout change, not just visibility toggle
+2. Collapse preview by setting `previewBorder.MaxWidth = 0` when hidden; restore fixed width when shown
+3. Cancel in-flight preview work and clear pending text when hiding pane
+
+**Why:** `IsVisible = false` was insufficient in HStack layout; width constraint must reset. Clearing stale work prevents delayed output from repopulating collapsed pane.
+
+---
+
+### 2026-03-16: Rubric Persistence and Judge-Mode Validation
+
+**Author:** Batty  
+**Status:** Completed
+
+Resolved two rejudge issues: missing scenario rubrics and silent fallback on mistyped `--judge-mode` values.
+
+**Decisions:**
+1. Persist scenario rubric snapshot in `sessions.db` as `sessions.rubric` JSON column
+2. Serialize missing rubrics as `[]` (not NULL) so NULL signals legacy-only data
+3. Self-migrate older `sessions.db` in `SessionDatabase.Initialize()` with rubric column + version bump
+4. Validate `--judge-mode` with `AcceptOnlyFromAmong()` to fail fast on typos
+
+**Why:** Rejudge must score against original rubric. Differentiating `[]` from NULL keeps warnings precise. Self-migration preserves older result directory compatibility. Strict option validation prevents operator mistakes.
+
+---
+
+### 2026-03-16: SDK Hook Analysis — Session Forking Feasibility
+
+**Author:** Batty  
+**Status:** Completed (Research)
+
+Analyzed GitHub.Copilot.SDK v0.1.32 hook API to determine if tool result mocking is feasible for session forking.
+
+**Finding:** Yes, tool result substitution is possible today via multiple mechanisms:
+- `PostToolUseHookOutput.ModifiedResult` — Replace tool result before LLM sees it
+- `SessionConfig.Tools` — Register custom tools shadowing built-ins
+- `ResumeSessionConfig` — Fork from checkpoint with replay hooks installed
+
+**Recommendation:** 
+- Upgrade Tempest from 0.1.25 → 0.1.32 (same hook shape; adds ResumeSessionConfig + workspace APIs)
+- No SDK changes needed for prototype
+- Implement hybrid approach: read-only tools use ModifiedResult; write tools use shadow custom tools
+
+**Roadmap:** Recording (Phase 1) → Replay/Fork (Phase 2) → Session Forking (Phase 3)
+
+---
+
 ### 2026-03-14: Session Browser Branch Metadata Fallback
 
 **Author:** Batty  

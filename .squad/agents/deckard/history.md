@@ -72,3 +72,43 @@
 - XenoPager's follow mode matches Spectre's file-watching + incremental parse logic
 - Both browsers use background thread for session loading with thread-safe lock
 - Filter cycling logic is identical (all → user → assistant → tool → error)
+
+### New Database Tables Analysis (2026-03-14) — FEATURE ROADMAP DEFINED
+
+**Investigation:** Analyzed dotnet-replay architecture against 5 new Copilot CLI session-store tables: `turns`, `checkpoints`, `session_files`, `session_refs`, `search_index`. Current codebase treats sessions as black-box transcripts; new tables enable cross-session search, granular checkpoint navigation, and dependency tracking.
+
+**Finding:** Session-store upgrade is **transformational**, not incremental. Shifts paradigm from "session browser" to "semantic knowledge graph."
+
+**Top 3 Recommendations (Prioritized by ROI):**
+
+1. **🥇 Checkpoint Navigation (HIGH VALUE, LOW LIFT)** — ★★★★☆
+   - Jump to named checkpoints within pager (`c` keybinding)
+   - Query `checkpoints` table → render menu → scroll to checkpoint turn
+   - Covers developer workflow: "Show me where I saved that fix"
+   - **Implementation:** DataParsers (+20 LOC), InteractivePager (+40 LOC), supporting edits ~80 LOC total
+   - **Timeline:** 1-2 days; low risk; proves DB patterns
+
+2. **🥈 Full-Text Search Across Sessions (TRANSFORMATIONAL, MEDIUM LIFT)** — ★★★★★
+   - Query `search_index` FTS5 to find patterns across *all* sessions
+   - New `--search <query>` CLI flag + interactive search results pane
+   - Unlocks discoverability: "Did I solve OAuth before?"
+   - **Implementation:** replay.cs (+30 LOC), SessionBrowser (+40 LOC), new results view ~145 LOC
+   - **Timeline:** 1-2 weeks; medium risk; highest user value
+   - **Strategic:** Multiplies tool utility; addresses open issue #12 (grep across transcripts)
+
+3. **🥉 Session Dependency Graph (STRATEGIC, HIGH LIFT)** — ★★★★☆
+   - Show files edited + GitHub refs (PRs/issues) per session
+   - New columns in browser: "Files Modified" + "Refs", sortable, clickable
+   - Power-user analytics: "Which sessions touched auth.ts? Did any reference issue #123?"
+   - **Implementation:** SessionBrowser (+60 LOC), DataGrid extension ~138 LOC
+   - **Timeline:** 2-3 weeks after Phase 2; medium risk
+   - **Defer if:** XenoSessionBrowser UI stability isn't proven; requires Phase 2 horizontal scrolling
+
+**Roadmap:**
+- Phase 1 (START HERE): Checkpoint navigation (proves DB patterns; low friction)
+- Phase 2: Full-text search (biggest UX multiplier; proven FTS5 index exists)
+- Phase 3 (optional): Dependency graph (when UI confidence is high)
+
+**Architectural notes:** Preserve parameter injection patterns (DataParsers, ContentRenderer). New features use read-only SQLite; degrade gracefully if tables missing. Add comprehensive tests before search ships.
+
+**Full analysis:** See `feature-analysis-new-db-tables.md` in this folder.

@@ -30,6 +30,12 @@
 
 <!-- Append new learnings below. Each entry is something lasting about the project. -->
 
+### 2026-03-15: PR #149 rubric persistence and judge-mode validation
+- `eng/skill-validator` rejudge fidelity depends on persisting scenario rubrics from `eval.yaml`; storing a JSON `string[]` rubric snapshot per session lets `rejudge` reconstruct `EvalScenario` with the original rubric instead of silently falling back to the default judge rubric.
+- Store `[]` for scenarios that intentionally have no rubric, and reserve `NULL` rubric values for legacy rows; that makes rejudge warnings meaningful because `NULL` now signals an older `sessions.db` that predates rubric persistence.
+- `SessionDatabase` should self-migrate older validator databases on open by adding the missing `sessions.rubric` column and bumping `schema_info["version"]`, so `GetCompletedSessions()` can safely query both fresh and legacy result directories.
+- `System.CommandLine` 2.0.4 uses `AcceptOnlyFromAmong(...)` rather than `FromAmong(...)` to reject invalid option values like mistyped `--judge-mode` arguments.
+
 ### 2026-03-15: XenoSessionBrowser preview pane collapse
 - In `XenoSessionBrowser.cs`, toggling a preview pane with `IsVisible` alone is not enough to restore the session list to full width inside the XenoAtom `HStack`; the hidden pane can still hold layout space.
 - To fully collapse the preview and let the `DataGrid` expand again, change the preview pane's width constraint when toggling (`MaxWidth = 0` when hidden, restore the fixed pane width when shown).
@@ -75,3 +81,17 @@
 - `JsonDocument` instances created only for follow-mode updates must not be retained in `JsonlData.Events`; clone the `JsonElement` needed for `Turns`, dispose the document immediately, and increment `EventCount` separately.
 - Xeno session browser preview workers should share a generation counter and bail out before expensive file parsing when their generation is stale; the UI-side generation check alone is not enough to prevent wasted background work.
 - Skill DB preview metrics parsing should use `using var` for temporary `JsonDocument` instances inside `BuildPreviewText()`.
+
+### 2026-03-15: Checkpoint Navigation (Tier 1)
+- Added `CheckpointRow` record to `Models.cs` and `LoadCheckpointsForSession` + `ResolveSessionDbContext` static methods to `DataParsers.cs`.
+- `ResolveSessionDbContext` derives the `session-store/sessions.db` path and session ID from an `events.jsonl` file path by walking the directory structure (`session-state/{id}/events.jsonl` → `session-store/sessions.db`).
+- Both pagers (`InteractivePager.cs` and `XenoPager.cs`) add a `c` keybinding for checkpoint navigation: list view with j/k selection, Enter to view detail (overview, work_done, next_steps), Escape to navigate back.
+- Graceful degradation: if the checkpoints table doesn't exist, session has no checkpoints, or DB path can't be resolved, the feature silently no-ops.
+- XenoPager checkpoint state must be declared before any `AddCommand` closures that capture it (C# local variable forward-reference restriction).
+- Fixed pre-existing test bug: `InsertCheckpoint` helper in `CheckpointTests.cs` was missing `cmd.ExecuteNonQuery()`.
+
+### 2026-04-02: Checkpoint Navigation Complete & Tested (Tier 1 Delivered)
+- Tier 1 complete: Both pagers have working checkpoint navigation with `c` keybinding
+- Database integration patterns proven: parameter injection + graceful degradation working correctly
+- Ready to unblock Tier 2 (Full-Text Search) after adoption feedback
+- Build clean (0 warnings), 84 tests passing, all CP tests green
