@@ -97,7 +97,8 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             .RowAnchorWidth(0)
             .SelectionMode(DataGridSelectionMode.Row)
             .ReadOnly(true)
-            .FrozenColumns(1);
+            .FrozenColumns(1)
+            .AutoFocus(true);
 
         // High-contrast selection style so the active row stands out
         grid.SetStyle(new DataGridStyle
