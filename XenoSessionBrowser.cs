@@ -99,6 +99,13 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             .ReadOnly(true)
             .FrozenColumns(1);
 
+        // High-contrast selection style so the active row stands out
+        grid.SetStyle(new DataGridStyle
+        {
+            SelectedFocused = Style.None.WithBackground(Color.Rgb(0, 90, 160)).WithForeground(Color.Rgb(255, 255, 255)),
+            SelectedUnfocused = Style.None.WithBackground(Color.Rgb(60, 60, 80)).WithForeground(Color.Rgb(200, 200, 200)),
+        });
+
         grid.Columns.Add(new DataGridColumn<string>
         {
             Key = "icon",
@@ -141,6 +148,7 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             .VerticalAlignment(Align.Stretch);
 
         int lastSelectedRow = -1;
+        bool autoSelectedFirstRow = false;
 
         // === Cross-session FTS5 search state ===
         bool inFtsSearch = false;
@@ -539,6 +547,13 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
                             doc.AddRow(MakeRow(s));
                     }
                     sessionCount.Value = doc.Rows.Count;
+
+                    // Auto-select the first row so keyboard navigation works immediately
+                    if (!autoSelectedFirstRow && doc.Rows.Count > 0)
+                    {
+                        grid.CurrentCell = new DataGridCell(0, 0);
+                        autoSelectedFirstRow = true;
+                    }
                 }
 
                 // Load preview text off the UI thread and hand completed text back to the next frame.
