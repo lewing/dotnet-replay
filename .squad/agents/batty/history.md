@@ -111,3 +111,10 @@
 - XenoPager (`s` key): Reuses LogControl's built-in search bar for query text capture — first `s` opens search bar, user types query, second `s` executes FTS search. Results shown in log with j/k navigation.
 - DB path resolution: tries `session-store.db` first, then `session-store/sessions.db` as fallback. Both browsers and pagers share the same pattern.
 - 20 unit tests in `SearchTests.cs` covering: happy path, highlight markers, empty/whitespace/null queries, missing table, empty table, limit, cross-session matches, source types, nullable SourceId, prefix/phrase/boolean/malformed queries.
+
+### 2026-04-02: DataGrid initial selection and selection contrast fixes
+- `DataGridControl.CurrentCell` accepts a `DataGridCell(row, col)` struct; setting it to `(0, 0)` after the first batch of sessions loads auto-selects the first row so keyboard navigation works immediately.
+- `DataGridStyle` is a `record` with `SelectedFocused` and `SelectedUnfocused` init-only `Style?` properties. Apply via `grid.SetStyle(new DataGridStyle { ... })` on the `DataGridControl` visual.
+- `Style` is a readonly struct; construct with `Style.None.WithBackground(Color.Rgb(r,g,b)).WithForeground(Color.Rgb(r,g,b))`.
+- `Color.Rgb(byte, byte, byte)` is the factory for 24-bit colors; `Color.Indexed256(int)` for 256-color palette.
+- The default theme selection style uses `StrengthenSelection()` which can produce near-invisible contrast on many terminals; explicit styles are preferred for the DataGrid.
