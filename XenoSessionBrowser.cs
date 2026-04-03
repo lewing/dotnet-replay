@@ -86,8 +86,8 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
             doc.AddColumn(new DataGridColumnInfo<string>("icon", " ", ReadOnly: true, SessionRow.Accessor.Icon));
             doc.AddColumn(new DataGridColumnInfo<string>("age", "Age", ReadOnly: true, SessionRow.Accessor.Age));
             doc.AddColumn(new DataGridColumnInfo<string>("size", "Size", ReadOnly: true, SessionRow.Accessor.Size));
-            doc.AddColumn(new DataGridColumnInfo<string>("summary", "Summary", ReadOnly: true, SessionRow.Accessor.Summary));
             doc.AddColumn(new DataGridColumnInfo<string>("branch", "Branch", ReadOnly: true, SessionRow.Accessor.Branch));
+            doc.AddColumn(new DataGridColumnInfo<string>("summary", "Summary", ReadOnly: true, SessionRow.Accessor.Summary));
         }
 
         using var view = new DataGridDocumentView(doc);
@@ -121,15 +121,16 @@ class XenoSessionBrowser(ContentRenderer cr, DataParsers dataParsers, string? se
         });
         grid.Columns.Add(new DataGridColumn<string>
         {
-            Key = "summary",
-            TypedValueAccessor = SessionRow.Accessor.Summary,
-            Width = GridLength.Star(3),
-        });
-        grid.Columns.Add(new DataGridColumn<string>
-        {
             Key = "branch",
             TypedValueAccessor = SessionRow.Accessor.Branch,
             Width = GridLength.Star(1),
+            MinWidth = 15,
+        });
+        grid.Columns.Add(new DataGridColumn<string>
+        {
+            Key = "summary",
+            TypedValueAccessor = SessionRow.Accessor.Summary,
+            Width = GridLength.Star(2),
         });
 
         // Preview panel — VStack of TextBlocks, one per line (TextBlock ignores \n)
