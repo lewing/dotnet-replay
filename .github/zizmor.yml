@@ -1,0 +1,7 @@
+# zizmor static-analysis configuration (https://docs.zizmor.sh/configuration/)
+rules:
+  excessive-permissions:
+    ignore:
+      # publish.yml legitimately needs id-token: write for trusted publishing
+      # (NuGet/login OIDC). contents: read remains the floor for the job.
+      - publish.yml

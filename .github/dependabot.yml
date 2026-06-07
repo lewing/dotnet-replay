@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Wait a few days before adopting a new release so a compromised
+    # action version isn't pulled in the instant it's published.
+    cooldown:
+      default-days: 7
+    groups:
+      github-owned-actions:
+        patterns:
+          - "actions/*"
+          - "github/*"
+    # Third-party actions (e.g. NuGet/*, zizmorcore/*) are intentionally
+    # left ungrouped so each SHA bump gets its own reviewable PR.
