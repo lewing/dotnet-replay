@@ -1,0 +1,13 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-owned-actions:
+        patterns:
+          - "actions/*"
+          - "github/*"
+    # Third-party actions (e.g. NuGet/*, zizmorcore/*) are intentionally
+    # left ungrouped so each SHA bump gets its own reviewable PR.
